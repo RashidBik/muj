@@ -9,4 +9,14 @@ export interface User {
   bio: string | null
 }
 
+// ✅ استفاده از writable با مقدار اولیه null
 export const user = writable<User | null>(null)
+
+// تابع‌های کمکی
+export function setUser(data: User | null) {
+  user.set(data)
+}
+
+export function clearUser() {
+  user.set(null)
+}
