@@ -1,6 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
   import { onMount } from 'svelte'
+  import { supabase } from '$lib/client/supabase'
+  import { user } from '$lib/stores/user'
   import Avatar from '$lib/components/ui/Avatar.svelte'
   import { formatDuration, getDurationLabel, getDurationColor } from '$lib/utils/wave-helpers'
   import { boostWave, getTokenBalance } from '$lib/services/token-service'
@@ -22,7 +24,9 @@
     Smile,
     Frown,
     AlertCircle,
-    X
+    X,
+    Send,
+    ChevronLeft
   } from 'lucide-svelte'
 
   let { 
@@ -44,25 +48,194 @@
   let isPlaying = $state(false)
   let isFollowing = $state(false)
 
-  let comments = $state([
-    { text: 'این موج عالیه!', direction: 'ltr' },
-    { text: 'موج بعدی کی منتشر میشه؟', direction: 'ltr' },
-    { text: 'صدای فوق‌العاده‌ای داره!', direction: 'ltr' },
-    { text: 'thats really great', direction: 'rtl' },
-    { text: 'I like the way goooooooo and here is the complete comment for your test', direction: 'rtl' },
-  ])
+  // Comment state
+  let showCommentInput = $state(false)
+  let commentText = $state('')
+  let isSubmitting = $state(false)
+  let currentUser = $state<any>(null)
+
+  // Comments modal state
+  let showCommentsModal = $state(false)
+  let allComments = $state<any[]>([])
+  let loadingAllComments = $state(false)
+
+  // Real comments from database
+  let comments = $state<any[]>([])
+  let loadingComments = $state(false)
 
   // Check if wave is boosted
   const isBoosted = wave.is_boosted && 
     wave.boost_expires_at && 
     new Date(wave.boost_expires_at) > new Date()
 
+  // Subscribe to user
+  $effect(() => {
+    const unsubscribe = user.subscribe(value => {
+      currentUser = value
+    })
+    return () => unsubscribe()
+  })
+
   // Load user balance
   onMount(async () => {
     if (currentUserId) {
       userBalance = await getTokenBalance(currentUserId)
     }
+    // Load real comments
+    await loadComments()
   })
+
+  // Load real comments from database
+  async function loadComments() {
+    if (!wave.id) return
+    loadingComments = true
+    
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select(`
+          content,
+          user:users(
+            id,
+            name,
+            username,
+            avatar
+          )
+        `)
+        .eq('wave_id', wave.id)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) throw error
+
+      comments = data && data.length > 0 
+        ? data.map(comment => ({
+            text: comment.content,
+            direction: /^[a-zA-Z0-9\s.,!?@#$%^&*()_+=\-`~]+$/.test(comment.content) ? 'rtl' : 'ltr',
+            user: comment.user
+          }))
+        : []
+
+    } catch (err) {
+      console.error('Error loading comments:', err)
+      comments = []
+    } finally {
+      loadingComments = false
+    }
+  }
+
+  // Load all comments for modal
+  async function loadAllComments() {
+    if (!wave.id) return
+    loadingAllComments = true
+    
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select(`
+          id,
+          content,
+          created_at,
+          user:users(
+            id,
+            name,
+            username,
+            avatar
+          )
+        `)
+        .eq('wave_id', wave.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+
+      allComments = data || []
+    } catch (err) {
+      console.error('Error loading all comments:', err)
+      allComments = []
+    } finally {
+      loadingAllComments = false
+    }
+  }
+
+  // Open comments modal
+  async function openCommentsModal() {
+    showCommentsModal = true
+    await loadAllComments()
+  }
+
+  // Close comments modal
+  function closeCommentsModal() {
+    showCommentsModal = false
+    allComments = []
+  }
+
+  // Submit comment
+  async function submitComment() {
+    if (!currentUser) {
+      goto('/auth/login')
+      return
+    }
+
+    const trimmed = commentText.trim()
+    if (!trimmed || isSubmitting) return
+
+    isSubmitting = true
+
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .insert({
+          content: trimmed,
+          wave_id: wave.id,
+          author_id: currentUser.id
+        })
+        .select(`
+          *,
+          user:users(
+            id,
+            name,
+            username,
+            avatar
+          )
+        `)
+        .single()
+
+      if (error) throw error
+
+      // Add new comment to the list
+      const newComment = {
+        text: data.content,
+        direction: /^[a-zA-Z0-9\s.,!?@#$%^&*()_+=\-`~]+$/.test(data.content) ? 'rtl' : 'ltr',
+        user: data.user
+      }
+      comments = [newComment, ...comments]
+      
+      // Also add to all comments if modal is open
+      if (showCommentsModal) {
+        allComments = [data, ...allComments]
+      }
+      
+      commentText = ''
+      showCommentInput = false
+
+    } catch (err) {
+      console.error('Error posting comment:', err)
+      alert('خطا در ارسال نظر. لطفاً دوباره تلاش کنید.')
+    } finally {
+      isSubmitting = false
+    }
+  }
+
+  function toggleCommentInput() {
+    if (!currentUser) {
+      goto('/auth/login')
+      return
+    }
+    showCommentInput = !showCommentInput
+    if (!showCommentInput) {
+      commentText = ''
+    }
+  }
 
   async function handleLike() {
     if (isLiking) return
@@ -71,8 +244,10 @@
     isLiking = false
   }
 
-  function goToProfile() {
-    if (wave.author?.username) {
+  function goToProfile(username?: string) {
+    if (username) {
+      goto(`/profile/${username}`)
+    } else if (wave.author?.username) {
       goto(`/profile/${wave.author.username}`)
     }
   }
@@ -137,6 +312,24 @@
     return num.toString()
   }
 
+  function formatTime(date: string): string {
+    try {
+      const now = new Date()
+      const commentDate = new Date(date)
+      const diffMs = now.getTime() - commentDate.getTime()
+      const diffMins = Math.floor(diffMs / 60000)
+      const diffHours = Math.floor(diffMs / 3600000)
+      const diffDays = Math.floor(diffMs / 86400000)
+
+      if (diffMins < 1) return 'لحظاتی پیش'
+      if (diffMins < 60) return `${diffMins} دقیقه پیش`
+      if (diffHours < 24) return `${diffHours} ساعت پیش`
+      if (diffDays < 7) return `${diffDays} روز پیش`
+      return commentDate.toLocaleDateString('fa-IR')
+    } catch {
+      return 'چندی پیش'
+    }
+  }
 </script>
 
 <div class="wave-card">
@@ -167,7 +360,7 @@
       
       <div class="wave-actions-top">
         <div class="wave-actions">
-          <button class="action-btn comment-btn" onclick={() => goto(`/wave/${wave.id}`)}>
+          <button class="action-btn comment-btn" onclick={toggleCommentInput}>
             <MessageCircle size={16} />
             <span class="stat-item"> {formatNumber(wave.comments_count || 0)}</span>
           </button>
@@ -186,10 +379,37 @@
       </div>
     </div>
 
+    <!-- Comment Input (toggles) -->
+    {#if showCommentInput}
+      <div class="comment-input-wrapper">
+        <div class="comment-input">
+          <textarea
+            placeholder="نظر خود را بنویسید..."
+            bind:value={commentText}
+            rows="3"
+            disabled={isSubmitting}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                submitComment()
+              }
+            }}
+          />
+          <button
+            class="send-btn"
+            onclick={submitComment}
+            disabled={!commentText.trim() || isSubmitting}
+          >
+            <Send size={18} />
+          </button>
+        </div>
+      </div>
+    {/if}
+
     <div class="wave-meta">
       <div class="wave-author">
         <Avatar src={wave.author?.avatar} size="sm" />
-        <span class="author-name" onclick={goToProfile}>{wave.author?.name || 'ناشناس'}</span>
+        <span class="author-name" onclick={() => goToProfile(wave.author?.username)}>{wave.author?.name || 'ناشناس'}</span>
         <button class="follow-btn {isFollowing ? 'following' : ''}" onclick={(e) => {
           e.stopPropagation()
           toggleFollow()
@@ -226,56 +446,121 @@
       </div>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="comments-marquee">
-      <div class="marquee-container">
-        <!-- LTR comments track -->
-        <div class="marquee-track ltr-track">
-          {#each comments.filter(c => c.direction === 'ltr') as comment, index}
-            <span class="comment-item ltr-text">
-              {comment.text}
-            </span>
-            {#if index < comments.filter(c => c.direction === 'ltr').length - 1}
-              <span class="comment-separator">•</span>
-            {/if}
-          {/each}
-          <!-- Duplicate for seamless loop -->
-          {#each comments.filter(c => c.direction === 'ltr') as comment, index}
-            <span class="comment-item ltr-text">
-              {comment.text}
-            </span>
-            {#if index < comments.filter(c => c.direction === 'ltr').length - 1}
-              <span class="comment-separator">•</span>
-            {/if}
-          {/each}
+    <!-- Real Comments Marquee - Clickable -->
+    {#if !loadingComments && comments.length > 0}
+      <div class="comments-marquee" onclick={openCommentsModal}>
+        <div class="marquee-container">
+          <!-- LTR comments track -->
+          <div class="marquee-track ltr-track">
+            {#each comments.filter(c => c.direction === 'ltr') as comment, index}
+              <span class="comment-item ltr-text">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.text}</span>
+                {#if index < comments.filter(c => c.direction === 'ltr').length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+            <!-- Duplicate for seamless loop -->
+            {#each comments.filter(c => c.direction === 'ltr') as comment, index}
+              <span class="comment-item ltr-text">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.text}</span>
+                {#if index < comments.filter(c => c.direction === 'ltr').length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+        
+        <div class="marquee-container">
+          <!-- RTL comments track -->
+          <div class="marquee-track rtl-track" dir="rtl">
+            {#each comments.filter(c => c.direction === 'rtl') as comment, index}
+              <span class="comment-item rtl-text">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.text}</span>
+                {#if index < comments.filter(c => c.direction === 'rtl').length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+            <!-- Duplicate for seamless loop -->
+            {#each comments.filter(c => c.direction === 'rtl') as comment, index}
+              <span class="comment-item rtl-text">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.text}</span>
+                {#if index < comments.filter(c => c.direction === 'rtl').length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+        
+        <div class="comments-view-all">
+          مشاهده همه نظرات
         </div>
       </div>
+    {/if}
+  </div>
+</div>
+
+<!-- Comments Modal -->
+{#if showCommentsModal}
+  <div class="modal-overlay" onclick={closeCommentsModal}>
+    <div class="modal-content comments-modal" onclick={(e) => e.stopPropagation()}>
+      <div class="modal-header">
+        <button class="modal-back-btn" onclick={closeCommentsModal}>
+          <ChevronLeft size={24} />
+        </button>
+        <h3>نظرات</h3>
+        <button class="modal-close" onclick={closeCommentsModal}>
+          <X size={20} />
+        </button>
+      </div>
       
-      <div class="marquee-container">
-        <!-- RTL comments track -->
-        <div class="marquee-track rtl-track" dir="rtl">
-          {#each comments.filter(c => c.direction === 'rtl') as comment, index}
-            <span class="comment-item rtl-text">
-              {comment.text}
-            </span>
-            {#if index < comments.filter(c => c.direction === 'rtl').length - 1}
-              <span class="comment-separator">•</span>
-            {/if}
+      <div class="comments-list">
+        {#if loadingAllComments}
+          <div class="comments-loading">
+            <div class="spinner-small"></div>
+            در حال بارگذاری نظرات...
+          </div>
+        {:else if allComments.length === 0}
+          <div class="no-comments">
+            <MessageCircle size={48} />
+            <p>هنوز نظری وجود ندارد</p>
+            <span>اولین نفری باشید که نظر می‌دهد</span>
+          </div>
+        {:else}
+          {#each allComments as comment (comment.id)}
+            <div class="comment-item-full">
+              <div class="comment-avatar" onclick={() => goToProfile(comment.user?.username)}>
+                {#if comment.user?.avatar}
+                  <img src={comment.user.avatar} alt={comment.user.name} />
+                {:else}
+                  <div class="avatar-placeholder">
+                    {comment.user?.name?.charAt(0) || '?'}
+                  </div>
+                {/if}
+              </div>
+              <div class="comment-content">
+                <div class="comment-header">
+                  <span class="comment-author" onclick={() => goToProfile(comment.user?.username)}>
+                    {comment.user?.name || 'ناشناس'}
+                  </span>
+                  <span class="comment-time">{formatTime(comment.created_at)}</span>
+                </div>
+                <p class="comment-body-text">{comment.content}</p>
+              </div>
+            </div>
           {/each}
-          <!-- Duplicate for seamless loop -->
-          {#each comments.filter(c => c.direction === 'rtl') as comment, index}
-            <span class="comment-item rtl-text">
-              {comment.text}
-            </span>
-            {#if index < comments.filter(c => c.direction === 'rtl').length - 1}
-              <span class="comment-separator">•</span>
-            {/if}
-          {/each}
-        </div>
+        {/if}
       </div>
     </div>
   </div>
-</div>
+{/if}
 
 <!-- Boost Modal -->
 {#if showBoostModal}
@@ -580,7 +865,81 @@
     gap: 2px;
   }
 
-  /* Comments Marquee */
+  /* Comment Input */
+  .comment-input-wrapper {
+    padding: 8px 0 12px 0;
+    border-bottom: 1px solid #f0f2f5;
+    margin-bottom: 8px;
+  }
+
+  .comment-input {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+
+  .comment-input textarea {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    resize: none;
+    min-height: 60px;
+    transition: border-color 0.2s;
+    background: #fafbfc;
+    color: #050505;
+  }
+
+  .comment-input textarea:focus {
+    outline: none;
+    border-color: #1877f2;
+    background: white;
+    box-shadow: 0 0 0 3px rgba(24, 119, 242, 0.1);
+  }
+
+  .comment-input textarea::placeholder {
+    color: #94a3b8;
+  }
+
+  .comment-input textarea:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .send-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #1877f2;
+    border: none;
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    align-self: flex-end;
+    margin-bottom: 2px;
+  }
+
+  .send-btn:hover:not(:disabled) {
+    background: #1664d8;
+    transform: scale(1.05);
+  }
+
+  .send-btn:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+
+  .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Real Comments Marquee - Clickable */
   .comments-marquee {
     display: flex;
     flex-direction: column;
@@ -590,6 +949,27 @@
     border-bottom: 1px solid #f0f2f5;
     margin-top: 8px;
     overflow: hidden;
+    cursor: pointer;
+    transition: background 0.2s;
+    position: relative;
+  }
+
+  .comments-marquee:hover {
+    background: #f8f9fa;
+  }
+
+  .comments-view-all {
+    text-align: center;
+    font-size: 12px;
+    color: #6366f1;
+    font-weight: 500;
+    padding-top: 4px;
+    border-top: 1px dashed #e2e8f0;
+    margin-top: 4px;
+  }
+
+  .comments-view-all:hover {
+    color: #4f46e5;
   }
 
   .marquee-container {
@@ -633,7 +1013,16 @@
   .comment-item {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+  }
+
+  .comment-user {
+    color: #6366f1;
+    font-weight: 600;
+  }
+
+  .comment-text {
+    color: #1a1a2e;
   }
 
   .comment-separator {
@@ -646,6 +1035,177 @@
 
   .rtl-text {
     direction: rtl;
+  }
+
+  /* Comments Modal */
+  .comments-modal {
+    max-width: 500px !important;
+    max-height: 80vh !important;
+    display: flex;
+    flex-direction: column;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  .comments-modal .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #f0f2f5;
+    flex-shrink: 0;
+    margin-bottom: 0;
+  }
+
+  .modal-back-btn {
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 50%;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-back-btn:hover {
+    background: #f1f5f9;
+    color: #1a1a2e;
+  }
+
+  .comments-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+
+  .comments-list::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .comments-list::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 2px;
+  }
+
+  .comments-list::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 2px;
+  }
+
+  .no-comments {
+    text-align: center;
+    padding: 60px 20px;
+    color: #94a3b8;
+  }
+
+  .no-comments :global(svg) {
+    color: #cbd5e1;
+    margin-bottom: 12px;
+  }
+
+  .no-comments p {
+    margin: 0 0 4px 0;
+    font-weight: 500;
+    color: #64748b;
+  }
+
+  .no-comments span {
+    font-size: 13px;
+    color: #94a3b8;
+  }
+
+  .comment-item-full {
+    display: flex;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+
+  .comment-item-full:last-child {
+    border-bottom: none;
+  }
+
+  .comment-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    overflow: hidden;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+
+  .comment-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+    font-size: 18px;
+    font-weight: 600;
+  }
+
+  .comment-content {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .comment-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 2px;
+  }
+
+  .comment-author {
+    font-weight: 600;
+    font-size: 14px;
+    color: #1a1a2e;
+    cursor: pointer;
+    transition: color 0.2s;
+  }
+
+  .comment-author:hover {
+    color: #6366f1;
+  }
+
+  .comment-time {
+    font-size: 12px;
+    color: #94a3b8;
+    flex-shrink: 0;
+  }
+
+  .comment-body-text {
+    margin: 0;
+    font-size: 14px;
+    color: #1a1a2e;
+    line-height: 1.6;
+    word-wrap: break-word;
+  }
+
+  .comments-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: #94a3b8;
+  }
+
+  .spinner-small {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 8px;
   }
 
   /* Modal */
@@ -852,6 +1412,65 @@
     .wave-stats {
       gap: 6px;
       font-size: 12px;
+    }
+
+    .marquee-track {
+      font-size: 11px;
+      padding: 0 8px;
+    }
+
+    .comment-user {
+      font-size: 11px;
+    }
+
+    .comment-text {
+      font-size: 11px;
+    }
+
+    .comment-input textarea {
+      font-size: 12px;
+      padding: 6px 10px;
+      min-height: 50px;
+    }
+
+    .send-btn {
+      width: 32px;
+      height: 32px;
+    }
+
+    .send-btn :global(svg) {
+      width: 16px;
+      height: 16px;
+    }
+
+    .comments-modal {
+      max-height: 90vh !important;
+      border-radius: 16px !important;
+    }
+
+    .comments-modal .modal-header {
+      padding: 12px 16px;
+    }
+
+    .comments-list {
+      padding: 12px 16px;
+    }
+
+    .comment-item-full {
+      padding: 10px 0;
+    }
+
+    .comment-avatar {
+      width: 32px;
+      height: 32px;
+    }
+
+    .comment-author {
+      font-size: 13px;
+    }
+
+    .comment-body-text {
+      font-size: 13px;
     }
   }
 </style>
