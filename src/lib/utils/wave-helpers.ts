@@ -34,3 +34,28 @@ export function getCategoryLabel(category: string): string {
   }
   return labels[category] || category
 }
+
+/**
+ * Check if a wave is a short wave (under 30 seconds)
+ */
+export function isShortWave(duration: number): boolean {
+  return duration < 30
+}
+
+/**
+ * Get the appropriate route for a wave based on its duration
+ */
+export function getWaveRoute(waveId: string, duration: number): string {
+  if (isShortWave(duration)) {
+    return `/story/${waveId}`
+  }
+  return `/wave/${waveId}`
+}
+
+/**
+ * Navigate to the appropriate wave view based on duration
+ */
+export function navigateToWave(goto: (url: string) => void, waveId: string, duration: number): void {
+  const route = getWaveRoute(waveId, duration)
+  goto(route)
+}

@@ -4,7 +4,25 @@
   import { user } from '$lib/stores/user'
   import { onMount } from 'svelte'
   import { trackEvent } from '$lib/services/analytics-service'
-
+  
+  // Icon imports (using Lucide icons - lightweight and professional)
+  import { 
+    ArrowLeft, 
+    Mic, 
+    Square, 
+    Upload, 
+    Image, 
+    Music, 
+    X, 
+    Send,
+    Clock,
+    CheckCircle,
+    AlertCircle,
+    Play,
+    StopCircle,
+    FolderOpen,
+    Trash2
+  } from 'lucide-svelte'
 
   // حالت‌های فرم
   let title = $state('')
@@ -18,17 +36,16 @@
   let audioChunks: Blob[] = []
   let currentUser: any = null
 
-  // دسته‌بندی‌ها
+  // دسته‌بندی‌ها با آیکون‌های مناسب
   const categories = [
-    { value: 'NEWS', label: '📰 اخبار' },
-    { value: 'EDUCATION', label: '📚 آموزش' },
-    { value: 'MUSIC', label: '🎵 موسیقی' },
-    { value: 'AUDIOBOOK', label: '📖 کتاب صوتی' },
-    { value: 'STORY', label: '📖 داستان' },
-    { value: 'FREE', label: '🎯 آزاد' }
+    { value: 'NEWS', label: 'اخبار', icon: '📰' },
+    { value: 'EDUCATION', label: 'آموزش', icon: '📚' },
+    { value: 'MUSIC', label: 'موسیقی', icon: '🎵' },
+    { value: 'AUDIOBOOK', label: 'کتاب صوتی', icon: '📖' },
+    { value: 'STORY', label: 'داستان', icon: '📖' },
+    { value: 'FREE', label: 'آزاد', icon: '🎯' }
   ]
 
-  // اشتراک‌گذاری در store کاربر
   $effect(() => {
     const unsubscribe = user.subscribe(value => {
       currentUser = value
@@ -61,7 +78,6 @@
       isRecording = true
       recordingTime = 0
 
-      // تایمر برای نمایش زمان
       const timer = setInterval(() => {
         if (isRecording) {
           recordingTime++
@@ -84,7 +100,6 @@
     }
   }
 
-  // انتخاب فایل صوتی
   function handleAudioUpload(event: Event) {
     const input = event.target as HTMLInputElement
     if (input.files && input.files.length > 0) {
@@ -92,7 +107,6 @@
     }
   }
 
-  // انتخاب تصویر کاور
   function handleCoverUpload(event: Event) {
     const input = event.target as HTMLInputElement
     if (input.files && input.files.length > 0) {
@@ -121,7 +135,6 @@
     isUploading = true
 
     try {
-      // ۱. آپلود فایل صوتی به Supabase Storage
       const audioFileName = `${Date.now()}_${audioFile.name}`
       const { data: audioData, error: audioError } = await supabase.storage
         .from('waves')
@@ -131,7 +144,6 @@
 
       const audioUrl = supabase.storage.from('waves').getPublicUrl(audioFileName).data.publicUrl
 
-      // ۲. آپلود تصویر کاور (اختیاری)
       let coverUrl = null
       if (coverFile) {
         const coverFileName = `cover_${Date.now()}_${coverFile.name}`
@@ -144,7 +156,6 @@
         }
       }
 
-      // ۳. محاسبه مدت زمان (با استفاده از Audio API)
       let duration = 0
       try {
         const audioElement = new Audio()
@@ -158,16 +169,13 @@
         })
         URL.revokeObjectURL(url)
       } catch (e) {
-        // اگر نتونست مدت زمان رو محاسبه کنه، از مقدار پیش‌فرض استفاده کنه
         duration = 60
       }
 
-      // ۴. تعیین دسته‌بندی مدت زمان
       let durationCategory = 'MEDIUM'
       if (duration < 60) durationCategory = 'SHORT'
       else if (duration > 240) durationCategory = 'LONG'
 
-      // ۵. ذخیره در دیتابیس
       const { data: waveData, error: waveError } = await supabase
         .from('waves')
         .insert({
@@ -194,7 +202,6 @@
         }
       })
 
-      // ۶. هدایت به صفحه موج جدید
       goto(`/wave/${waveData.id}`)
 
     } catch (error) {
@@ -205,57 +212,73 @@
     }
   }
 
-  // تبدیل ثانیه به فرمت دقیقه:ثانیه
   function formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
 
-  // بررسی وجود کاربر
   onMount(() => {
-    if (!currentUser) {
-      // فعلاً کاربر تستی بسازیم
-      // در مرحله بعد با احراز هویت واقعی جایگزین می‌شود
-    }
+    // Initialize if needed
   })
 </script>
 
 <div class="create-wave-page">
   <div class="container">
-    <!-- هدر -->
+    <!-- هدر با آیکون -->
     <div class="header">
-      <button class="back-btn" onclick={() => goto('/')}>← بازگشت</button>
-      <h1>موج جدید</h1>
+      <button class="back-btn" onclick={() => goto('/')}>
+        <ArrowLeft size={20} />
+        <span>بازگشت</span>
+      </button>
+      <h1>
+        <Mic size={24} />
+        موج جدید
+      </h1>
       <div></div>
     </div>
 
     <!-- بخش ضبط صدا -->
     <div class="section">
-      <h3>🎙️ ضبط صدا</h3>
+      <div class="section-header">
+        <Mic size={18} />
+        <h3>ضبط صدا</h3>
+      </div>
+      
       <div class="recording-area">
         {#if !audioFile}
           <div class="record-buttons">
             {#if !isRecording}
               <button class="record-btn" onclick={startRecording}>
-                🔴 شروع ضبط
+                <Mic size={20} />
+                شروع ضبط
               </button>
             {:else}
               <div class="recording-indicator">
-                <span class="blink">🔴</span>
-                <span class="time">{formatTime(recordingTime)}</span>
+                <div class="recording-status">
+                  <span class="recording-dot"></span>
+                  <span class="recording-label">در حال ضبط</span>
+                </div>
+                <span class="time">
+                  <Clock size={16} />
+                  {formatTime(recordingTime)}
+                </span>
                 <button class="stop-btn" onclick={stopRecording}>
-                  ⏹️ توقف
+                  <Square size={18} />
+                  توقف
                 </button>
               </div>
             {/if}
           </div>
 
-          <div class="divider">یا</div>
+          <div class="divider">
+            <span>یا</span>
+          </div>
 
           <div class="upload-area">
             <label class="upload-btn" for="audio-upload">
-              📁 انتخاب فایل صوتی
+              <FolderOpen size={18} />
+              انتخاب فایل صوتی
             </label>
             <input
               id="audio-upload"
@@ -267,9 +290,13 @@
           </div>
         {:else}
           <div class="file-selected">
-            ✅ {audioFile.name}
+            <div class="file-info">
+              <Music size={20} />
+              <span class="file-name">{audioFile.name}</span>
+              <span class="file-size">({(audioFile.size / 1024 / 1024).toFixed(2)} MB)</span>
+            </div>
             <button class="remove-btn" onclick={() => audioFile = null}>
-              ✖️
+              <X size={18} />
             </button>
           </div>
         {/if}
@@ -278,18 +305,24 @@
 
     <!-- تصویر کاور -->
     <div class="section">
-      <h3>🖼️ تصویر کاور</h3>
+      <div class="section-header">
+        <Image size={18} />
+        <h3>تصویر کاور</h3>
+      </div>
+      
       <div class="cover-area">
         {#if coverFile}
           <div class="cover-preview">
             <img src={URL.createObjectURL(coverFile)} alt="کاور" />
-            <button class="remove-btn" onclick={() => coverFile = null}>
-              ✖️
+            <button class="remove-btn cover-remove" onclick={() => coverFile = null}>
+              <X size={16} />
             </button>
           </div>
         {:else}
-          <label class="upload-btn" for="cover-upload">
-            📷 انتخاب تصویر
+          <label class="upload-btn cover-upload" for="cover-upload">
+            <Image size={20} />
+            انتخاب تصویر
+            <span class="upload-hint">(اختیاری)</span>
           </label>
           <input
             id="cover-upload"
@@ -304,21 +337,33 @@
 
     <!-- عنوان و دسته‌بندی -->
     <div class="section">
-      <h3>📝 اطلاعات موج</h3>
-      <input
-        type="text"
-        class="title-input"
-        placeholder="عنوان موج را وارد کنید..."
-        bind:value={title}
-        maxlength="60"
-      />
-      <div class="char-count">{title.length}/60</div>
+      <div class="section-header">
+        <Music size={18} />
+        <h3>اطلاعات موج</h3>
+      </div>
+      
+      <div class="title-field">
+        <input
+          type="text"
+          class="title-input"
+          placeholder="عنوان موج را وارد کنید..."
+          bind:value={title}
+          maxlength="60"
+        />
+        <div class={`char-count ${title.length > 50 ? 'char-warning' : ''}`}>
+          {title.length}/60
+        </div>
+      </div>
 
-      <select class="category-select" bind:value={category}>
-        {#each categories as cat}
-          <option value={cat.value}>{cat.label}</option>
-        {/each}
-      </select>
+      <div class="category-field">
+        <select class="category-select" bind:value={category}>
+          {#each categories as cat}
+            <option value={cat.value}>
+              {cat.icon} {cat.label}
+            </option>
+          {/each}
+        </select>
+      </div>
     </div>
 
     <!-- دکمه انتشار -->
@@ -328,183 +373,354 @@
       disabled={!audioFile || !title.trim() || isUploading}
     >
       {#if isUploading}
+        <span class="spinner"></span>
         در حال انتشار...
       {:else}
-        📤 انتشار موج
+        <Send size={20} />
+        انتشار موج
       {/if}
     </button>
   </div>
 </div>
 
 <style>
+  /* Reset and base */
   .create-wave-page {
     min-height: 100vh;
-    background: #f0f2f5;
-    padding: 16px;
+    background: linear-gradient(135deg, #f5f7fa 0%, #e9edf5 100%);
+    padding: 20px;
   }
 
   .container {
-    max-width: 600px;
+    max-width: 640px;
     margin: 0 auto;
-    background: white;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 28px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    transition: box-shadow 0.3s ease;
   }
 
+  .container:hover {
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.12);
+  }
+
+  /* Header */
   .header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 24px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid #e4e6eb;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 2px solid #f0f2f5;
   }
 
   .header h1 {
-    font-size: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 22px;
+    font-weight: 700;
     margin: 0;
-    color: #050505;
+    color: #1a1a2e;
+  }
+
+  .header h1 :global(svg) {
+    color: #6366f1;
   }
 
   .back-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     background: none;
     border: none;
-    color: #1877f2;
-    font-size: 16px;
+    color: #6366f1;
+    font-size: 15px;
+    font-weight: 500;
     cursor: pointer;
-    padding: 8px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
   }
 
   .back-btn:hover {
-    background: #f0f2f5;
-    border-radius: 8px;
+    background: #f0f0ff;
+    transform: translateX(-2px);
   }
 
+  .back-btn :global(svg) {
+    transition: transform 0.2s ease;
+  }
+
+  .back-btn:hover :global(svg) {
+    transform: translateX(-4px);
+  }
+
+  /* Sections */
   .section {
-    margin-bottom: 24px;
+    margin-bottom: 28px;
   }
 
-  .section h3 {
-    font-size: 16px;
-    margin: 0 0 12px 0;
-    color: #65676b;
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
   }
 
+  .section-header :global(svg) {
+    color: #6366f1;
+  }
+
+  .section-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    color: #374151;
+  }
+
+  /* Recording Area */
   .recording-area {
-    background: #f7f8fa;
-    border-radius: 8px;
-    padding: 16px;
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 20px;
     text-align: center;
+    border: 2px dashed #e2e8f0;
+    transition: border-color 0.3s ease;
+  }
+
+  .recording-area:hover {
+    border-color: #c7d2fe;
   }
 
   .record-btn {
-    background: #dc3545;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: #ef4444;
     color: white;
     border: none;
-    padding: 12px 24px;
-    border-radius: 8px;
+    padding: 14px 32px;
+    border-radius: 10px;
     font-size: 16px;
+    font-weight: 600;
     cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
   }
 
   .record-btn:hover {
-    background: #c82333;
+    background: #dc2626;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+  }
+
+  .record-btn:active {
+    transform: translateY(0);
   }
 
   .recording-indicator {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 16px;
+    gap: 20px;
+    flex-wrap: wrap;
   }
 
-  .blink {
-    animation: blink 1s infinite;
+  .recording-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
-  @keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0; }
+  .recording-dot {
+    width: 12px;
+    height: 12px;
+    background: #ef4444;
+    border-radius: 50%;
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  .recording-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #ef4444;
   }
 
   .time {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 24px;
-    font-weight: bold;
-    color: #050505;
+    font-weight: 700;
+    color: #1a1a2e;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .time :global(svg) {
+    color: #6366f1;
   }
 
   .stop-btn {
-    background: #6c757d;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #64748b;
     color: white;
     border: none;
-    padding: 8px 16px;
+    padding: 10px 20px;
     border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
     cursor: pointer;
+    transition: all 0.2s ease;
   }
 
   .stop-btn:hover {
-    background: #5a6268;
+    background: #475569;
+    transform: scale(1.02);
   }
 
   .divider {
-    margin: 12px 0;
-    color: #65676b;
-    font-size: 14px;
+    display: flex;
+    align-items: center;
+    margin: 16px 0;
+    color: #94a3b8;
+    font-size: 13px;
+  }
+
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e2e8f0;
+  }
+
+  .divider span {
+    padding: 0 16px;
+    font-weight: 500;
   }
 
   .upload-area {
-    margin-top: 8px;
+    margin-top: 4px;
   }
 
   .upload-btn {
-    display: inline-block;
-    background: #e4e6eb;
-    color: #050505;
-    padding: 10px 20px;
-    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #ffffff;
+    color: #1a1a2e;
+    padding: 12px 24px;
+    border-radius: 10px;
     cursor: pointer;
     font-size: 14px;
+    font-weight: 500;
+    border: 2px solid #e2e8f0;
+    transition: all 0.2s ease;
   }
 
   .upload-btn:hover {
-    background: #d8dadf;
+    border-color: #6366f1;
+    background: #f8fafc;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
   }
 
   .hidden {
     display: none;
   }
 
+  /* File selected */
   .file-selected {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: #eef2ff;
+    border-radius: 10px;
+    border: 2px solid #c7d2fe;
+  }
+
+  .file-info {
+    display: flex;
+    align-items: center;
     gap: 12px;
-    padding: 12px;
-    background: #e7f3ff;
-    border-radius: 8px;
-    color: #1877f2;
+    flex: 1;
+  }
+
+  .file-info :global(svg) {
+    color: #6366f1;
+    flex-shrink: 0;
+  }
+
+  .file-name {
+    font-weight: 500;
+    color: #1a1a2e;
+    word-break: break-all;
+  }
+
+  .file-size {
+    font-size: 12px;
+    color: #64748b;
   }
 
   .remove-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: none;
-    color: #65676b;
+    color: #64748b;
     cursor: pointer;
-    font-size: 18px;
-    padding: 0 4px;
+    padding: 4px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
   }
 
   .remove-btn:hover {
-    color: #dc3545;
+    background: #fee2e2;
+    color: #ef4444;
   }
 
+  /* Cover Area */
   .cover-area {
-    background: #f7f8fa;
-    border-radius: 8px;
-    padding: 16px;
+    background: #f8fafc;
+    border-radius: 12px;
+    padding: 20px;
     text-align: center;
-    min-height: 100px;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed #e2e8f0;
+    transition: border-color 0.3s ease;
+  }
+
+  .cover-area:hover {
+    border-color: #c7d2fe;
+  }
+
+  .cover-upload {
+    flex-direction: column;
+    gap: 6px;
+    padding: 20px 32px;
+  }
+
+  .cover-upload :global(svg) {
+    color: #6366f1;
+  }
+
+  .upload-hint {
+    font-size: 12px;
+    color: #94a3b8;
   }
 
   .cover-preview {
@@ -513,80 +729,179 @@
   }
 
   .cover-preview img {
-    max-width: 200px;
-    max-height: 150px;
-    border-radius: 8px;
+    max-width: 180px;
+    max-height: 140px;
+    border-radius: 10px;
     object-fit: cover;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   }
 
-  .cover-preview .remove-btn {
+  .cover-remove {
     position: absolute;
-    top: -8px;
-    right: -8px;
+    top: -10px;
+    right: -10px;
     background: white;
     border-radius: 50%;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .cover-remove:hover {
+    background: #fee2e2;
+    color: #ef4444;
+    transform: scale(1.1);
+  }
+
+  /* Title and Category */
+  .title-field {
+    position: relative;
   }
 
   .title-input {
     width: 100%;
-    padding: 12px;
-    border: 1px solid #d0d7de;
-    border-radius: 8px;
+    padding: 14px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
     font-size: 16px;
-    margin-bottom: 4px;
+    transition: all 0.2s ease;
+    background: #fafbfc;
   }
 
   .title-input:focus {
     outline: none;
-    border-color: #1877f2;
+    border-color: #6366f1;
+    background: white;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+  }
+
+  .title-input::placeholder {
+    color: #94a3b8;
   }
 
   .char-count {
     text-align: right;
     font-size: 12px;
-    color: #65676b;
+    color: #94a3b8;
+    margin-top: 4px;
+    transition: color 0.2s ease;
+  }
+
+  .char-warning {
+    color: #f59e0b;
+  }
+
+  .category-field {
+    margin-top: 12px;
   }
 
   .category-select {
     width: 100%;
-    padding: 12px;
-    border: 1px solid #d0d7de;
-    border-radius: 8px;
+    padding: 14px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
     font-size: 16px;
-    margin-top: 8px;
-    background: white;
+    background: #fafbfc;
+    transition: all 0.2s ease;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: left 14px center;
+    padding-right: 40px;
   }
 
   .category-select:focus {
     outline: none;
-    border-color: #1877f2;
+    border-color: #6366f1;
+    background-color: white;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
   }
 
+  /* Publish Button */
   .publish-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     width: 100%;
-    background: #1877f2;
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
     color: white;
     border: none;
-    padding: 14px;
-    border-radius: 8px;
+    padding: 16px;
+    border-radius: 12px;
     font-size: 18px;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
   }
 
   .publish-btn:hover:not(:disabled) {
-    background: #1664d8;
+    transform: translateY(-2px);
+    box-shadow: 0 8px 28px rgba(99, 102, 241, 0.45);
+  }
+
+  .publish-btn:active:not(:disabled) {
+    transform: translateY(0);
   }
 
   .publish-btn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
+    transform: none;
+  }
+
+  .publish-btn :global(svg) {
+    color: white;
+  }
+
+  /* Spinner for loading state */
+  .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: white;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Responsive Design */
+  @media (max-width: 640px) {
+    .container {
+      padding: 16px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+    }
+
+    .header h1 :global(svg) {
+      width: 20px;
+      height: 20px;
+    }
+
+    .recording-indicator {
+      gap: 12px;
+    }
+
+    .time {
+      font-size: 20px;
+    }
+
+    .publish-btn {
+      font-size: 16px;
+      padding: 14px;
+    }
   }
 </style>
