@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { supabase } from '$lib/client/supabase'
   
   // Icon imports
   import {
@@ -56,10 +55,6 @@
   let speedDisplay: HTMLElement | null = null
   let speedDot: HTMLElement | null = null
 
-  // Real comments from database
-  let comments = $state<any[]>([])
-  let commentsLoaded = $state(false)
-
   // Size constants
   const SIZE = 500
 
@@ -81,44 +76,6 @@
     if (isPlaying) stopVisualizer()
   }
 
-  // Load real comments
-  async function loadComments() {
-    if (!waveId) return
-    
-    try {
-      const { data, error } = await supabase
-        .from('comments')
-        .select(`
-          content,
-          user:users(
-            name,
-            username,
-            avatar
-          )
-        `)
-        .eq('wave_id', waveId)
-        .order('created_at', { ascending: false })
-        .limit(10)
-
-      if (error) throw error
-
-      if (data && data.length > 0) {
-        comments = data
-      } else {
-        // Fallback comments if none exist
-        comments = [
-          { content: 'اولین نفری باشید که نظر می‌دهد!', user: { name: 'سیستم' } }
-        ]
-      }
-      commentsLoaded = true
-    } catch (err) {
-      console.error('Error loading comments:', err)
-      comments = [
-        { content: 'نظری برای این موج ثبت نشده است', user: { name: 'سیستم' } }
-      ]
-    }
-  }
-
   // Initialize canvas
   onMount(() => {
     if (canvas) {
@@ -127,9 +84,6 @@
       ctx = canvas.getContext('2d')
       drawEmptyState()
     }
-    
-    // Load real comments
-    loadComments()
     
     // Initialize audio element with the actual audio URL
     if (audioUrl) {
@@ -392,7 +346,9 @@
 
   // Keyboard shortcuts
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.target?.tagName === 'INPUT') return
+    // Ignore if user is typing in input or textarea
+    if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return
+    
     if (e.key === ' ' || e.key === 'Space') { 
       e.preventDefault() 
       togglePlay() 
@@ -451,33 +407,6 @@
           <span class="speed-dot inactive" bind:this={speedDot}></span>
         </div>
       </div>
-      
-      <!-- Real comments marquee - LARGER TEXT -->
-      {#if comments.length > 0}
-        <div class="comments-marquee">
-          <div class="marquee-track">
-            {#each comments as comment, index}
-              <span class="comment-item">
-                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
-                <span class="comment-text">{comment.content}</span>
-                {#if index < comments.length - 1}
-                  <span class="comment-separator">•</span>
-                {/if}
-              </span>
-            {/each}
-            <!-- Duplicate for seamless loop -->
-            {#each comments as comment, index}
-              <span class="comment-item">
-                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
-                <span class="comment-text">{comment.content}</span>
-                {#if index < comments.length - 1}
-                  <span class="comment-separator">•</span>
-                {/if}
-              </span>
-            {/each}
-          </div>
-        </div>
-      {/if}
     </div>
   </div>
 </div>
@@ -666,60 +595,7 @@
     opacity: 0.4;
   }
 
-  /* Real Comments Marquee - LARGER TEXT */
-  .comments-marquee {
-    width: 100%;
-    overflow: hidden;
-    padding: clamp(6px, 1vh, 10px) 0;
-    background: rgba(255,255,255,0.04);
-    border-radius: 8px;
-    border: 1px solid rgba(255,255,255,0.04);
-    flex-shrink: 0;
-  }
-
-  .marquee-track {
-    display: inline-flex;
-    white-space: nowrap;
-    gap: clamp(12px, 2vw, 20px);
-    padding: 0 clamp(12px, 2vw, 20px);
-    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
-    color: rgba(255,255,255,0.6);
-    align-items: center;
-    animation: marqueeScroll 30s linear infinite;
-  }
-
-  .marquee-track:hover {
-    animation-play-state: paused;
-  }
-
-  @keyframes marqueeScroll {
-    0% { transform: translateX(0); }
-    100% { transform: translateX(-50%); }
-  }
-
-  .comment-item {
-    display: inline-flex;
-    align-items: center;
-    gap: clamp(6px, 1vw, 10px);
-  }
-
-  .comment-user {
-    color: rgba(255,255,255,0.9);
-    font-weight: 700;
-    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
-  }
-
-  .comment-text {
-    color: rgba(255,255,255,0.7);
-    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
-  }
-
-  .comment-separator {
-    color: rgba(255,255,255,0.15);
-    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
-  }
-
-  /* Mobile - Keep text readable */
+  /* Mobile */
   @media (max-width: 480px) {
     .controll-container {
       max-height: 100vh;
@@ -771,29 +647,6 @@
       width: 3px;
       height: 3px;
     }
-
-    .comments-marquee {
-      padding: 4px 0;
-    }
-
-    .marquee-track {
-      font-size: clamp(0.7rem, 2vw, 0.85rem);
-      gap: 8px;
-      padding: 0 10px;
-      animation-duration: 25s;
-    }
-
-    .comment-user {
-      font-size: clamp(0.7rem, 2vw, 0.85rem);
-    }
-
-    .comment-text {
-      font-size: clamp(0.7rem, 2vw, 0.85rem);
-    }
-
-    .comment-separator {
-      font-size: clamp(0.7rem, 2vw, 0.85rem);
-    }
   }
 
   /* Extra small phones */
@@ -810,19 +663,6 @@
     .play-toggle-btn :global(svg) {
       width: clamp(12px, 3vw, 16px);
       height: clamp(12px, 3vw, 16px);
-    }
-
-    .marquee-track {
-      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
-      animation-duration: 20s;
-    }
-
-    .comment-user {
-      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
-    }
-
-    .comment-text {
-      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
     }
   }
 
@@ -856,29 +696,6 @@
 
     .controls-row {
       gap: 0.15rem;
-    }
-
-    .comments-marquee {
-      padding: 2px 0;
-    }
-
-    .marquee-track {
-      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
-      animation-duration: 15s;
-      gap: 4px;
-      padding: 0 6px;
-    }
-
-    .comment-user {
-      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
-    }
-
-    .comment-text {
-      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
-    }
-
-    .comment-separator {
-      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
     }
   }
 </style>
