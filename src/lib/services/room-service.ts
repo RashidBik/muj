@@ -3,9 +3,12 @@ import type { User } from '$lib/stores/user'
 
 export interface RoomMessage {
   id: string
-  content: string
+  content: string | null
   wave_id: string
   author_id: string
+  audio_url?: string | null
+  duration?: number | null
+  is_audio?: boolean
   is_pinned: boolean
   created_at: string
   author?: {
@@ -31,10 +34,11 @@ export interface RoomAudioMessage {
   }
 }
 
-// دریافت پیام‌های متنی اتاق
+// Get all room messages (text + audio combined)
 export async function getRoomMessages(waveId: string): Promise<RoomMessage[]> {
   try {
-    const { data, error } = await supabase
+    // Get text messages
+    const { data: textMessages, error: textError } = await supabase
       .from('room_messages')
       .select(`
         *,
@@ -49,15 +53,68 @@ export async function getRoomMessages(waveId: string): Promise<RoomMessage[]> {
       .order('created_at', { ascending: true })
       .limit(100)
 
-    if (error) throw error
-    return data || []
+    if (textError) throw textError
+
+    // Get audio messages
+    const { data: audioMessages, error: audioError } = await supabase
+      .from('room_audio_messages')
+      .select(`
+        *,
+        author:users(
+          id,
+          name,
+          username,
+          avatar
+        )
+      `)
+      .eq('wave_id', waveId)
+      .order('created_at', { ascending: true })
+      .limit(50)
+
+    if (audioError) throw audioError
+
+    // Combine and sort by created_at
+    const allMessages: RoomMessage[] = []
+
+    // Add text messages with is_audio: false
+    if (textMessages) {
+      allMessages.push(...textMessages.map(msg => ({
+        ...msg,
+        is_audio: false,
+        audio_url: null,
+        duration: null
+      })))
+    }
+
+    // Add audio messages with is_audio: true
+    if (audioMessages) {
+      allMessages.push(...audioMessages.map(msg => ({
+        id: msg.id,
+        content: null,
+        wave_id: msg.wave_id,
+        author_id: msg.author_id,
+        audio_url: msg.audio_url,
+        duration: msg.duration,
+        is_audio: true,
+        is_pinned: false,
+        created_at: msg.created_at,
+        author: msg.author
+      })))
+    }
+
+    // Sort by created_at
+    allMessages.sort((a, b) => 
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )
+
+    return allMessages
   } catch (error) {
-    console.error('خطا در دریافت پیام‌های اتاق:', error)
+    console.error('Error loading room messages:', error)
     throw error
   }
 }
 
-// دریافت پیام‌های صوتی اتاق
+// Get only audio messages
 export async function getRoomAudioMessages(waveId: string): Promise<RoomAudioMessage[]> {
   try {
     const { data, error } = await supabase
@@ -78,12 +135,12 @@ export async function getRoomAudioMessages(waveId: string): Promise<RoomAudioMes
     if (error) throw error
     return data || []
   } catch (error) {
-    console.error('خطا در دریافت پیام‌های صوتی:', error)
+    console.error('Error loading audio messages:', error)
     throw error
   }
 }
 
-// ارسال پیام متنی
+// Send text message
 export async function sendRoomMessage(
   waveId: string,
   authorId: string,
@@ -95,7 +152,8 @@ export async function sendRoomMessage(
       .insert({
         content: content.trim(),
         wave_id: waveId,
-        author_id: authorId
+        author_id: authorId,
+        is_pinned: false
       })
       .select(`
         *,
@@ -109,14 +167,19 @@ export async function sendRoomMessage(
       .single()
 
     if (error) throw error
-    return data
+    return {
+      ...data,
+      is_audio: false,
+      audio_url: null,
+      duration: null
+    }
   } catch (error) {
-    console.error('خطا در ارسال پیام:', error)
+    console.error('Error sending message:', error)
     throw error
   }
 }
 
-// ارسال پیام صوتی
+// Send audio message
 export async function sendRoomAudioMessage(
   waveId: string,
   authorId: string,
@@ -124,7 +187,7 @@ export async function sendRoomAudioMessage(
   duration: number
 ): Promise<RoomAudioMessage> {
   try {
-    // بررسی محدودیت ۵۰ پیام صوتی
+    // Check limit of 50 audio messages
     const { count, error: countError } = await supabase
       .from('room_audio_messages')
       .select('*', { count: 'exact', head: true })
@@ -158,12 +221,34 @@ export async function sendRoomAudioMessage(
     if (error) throw error
     return data
   } catch (error) {
-    console.error('خطا در ارسال پیام صوتی:', error)
+    console.error('Error sending audio message:', error)
     throw error
   }
 }
 
-// پین کردن پیام
+// Send audio message and return as RoomMessage (for compatibility)
+export async function sendAudioMessage(
+  waveId: string,
+  authorId: string,
+  audioUrl: string,
+  duration: number
+): Promise<RoomMessage> {
+  const result = await sendRoomAudioMessage(waveId, authorId, audioUrl, duration)
+  return {
+    id: result.id,
+    content: null,
+    wave_id: result.wave_id,
+    author_id: result.author_id,
+    audio_url: result.audio_url,
+    duration: result.duration,
+    is_audio: true,
+    is_pinned: false,
+    created_at: result.created_at,
+    author: result.author
+  }
+}
+
+// Pin a message
 export async function pinRoomMessage(
   messageId: string,
   isPinned: boolean
@@ -177,18 +262,18 @@ export async function pinRoomMessage(
     if (error) throw error
     return true
   } catch (error) {
-    console.error('خطا در پین کردن پیام:', error)
+    console.error('Error pinning message:', error)
     throw error
   }
 }
 
-// حذف پیام
+// Delete message
 export async function deleteRoomMessage(
   messageId: string,
   userId: string
 ): Promise<boolean> {
   try {
-    // بررسی اینکه کاربر نویسنده پیام است
+    // Check if user is the author
     const { data: message, error: fetchError } = await supabase
       .from('room_messages')
       .select('author_id')
@@ -208,12 +293,55 @@ export async function deleteRoomMessage(
     if (error) throw error
     return true
   } catch (error) {
-    console.error('خطا در حذف پیام:', error)
+    console.error('Error deleting message:', error)
     throw error
   }
 }
 
-// دریافت تعداد پیام‌های صوتی
+// Clear all messages in a room
+export async function clearRoomMessages(
+  waveId: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    // Check if user is the room owner or admin (you can customize this)
+    // For now, we'll allow the wave author to clear messages
+    const { data: wave, error: waveError } = await supabase
+      .from('waves')
+      .select('author_id')
+      .eq('id', waveId)
+      .single()
+
+    if (waveError) throw waveError
+    
+    if (wave.author_id !== userId) {
+      throw new Error('شما اجازه پاک کردن پیام‌های این اتاق را ندارید')
+    }
+
+    // Delete all text messages
+    const { error: textError } = await supabase
+      .from('room_messages')
+      .delete()
+      .eq('wave_id', waveId)
+
+    if (textError) throw textError
+
+    // Delete all audio messages
+    const { error: audioError } = await supabase
+      .from('room_audio_messages')
+      .delete()
+      .eq('wave_id', waveId)
+
+    if (audioError) throw audioError
+
+    return true
+  } catch (error) {
+    console.error('Error clearing messages:', error)
+    throw error
+  }
+}
+
+// Get audio message count
 export async function getAudioMessageCount(waveId: string): Promise<number> {
   try {
     const { count, error } = await supabase
@@ -224,7 +352,7 @@ export async function getAudioMessageCount(waveId: string): Promise<number> {
     if (error) throw error
     return count || 0
   } catch (error) {
-    console.error('خطا در دریافت تعداد پیام‌های صوتی:', error)
+    console.error('Error getting audio count:', error)
     return 0
   }
 }
