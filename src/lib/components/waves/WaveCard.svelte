@@ -25,6 +25,15 @@
   let boostSuccess = $state(false)
   let isPlaying = $state(false)
 
+  let comments = $state([
+    { text: 'این موج عالیه!', direction: 'ltr' },
+    { text: 'موج بعدی کی منتشر میشه؟', direction: 'ltr' },
+    { text: 'صدای فوق‌العاده‌ای داره!', direction: 'ltr' },
+     { text: 'thats really great', direction: 'rtl' },
+    { text: 'I like the way goooooooo and here is the complete comment for your test', direction: 'rtl' },
+
+
+  ]);
   // Check if wave is boosted
   const isBoosted = wave.is_boosted && 
     wave.boost_expires_at && 
@@ -188,7 +197,35 @@
     </div>
 
     <!-- Action Buttons -->
-   
+<div class="comments-marquee">
+  <div class="marquee-container">
+    <!-- LTR comments track -->
+    <div class="marquee-track ltr-track">
+      {#each comments.filter(c => c.direction === 'ltr') as comment, index}
+        <span class="comment-item ltr-text">
+          {comment.text}
+        </span>
+        {#if index < comments.filter(c => c.direction === 'ltr').length - 1}
+          <span class="comment-separator">•</span>
+        {/if}
+      {/each}
+    </div>
+  </div>
+  
+  <div class="marquee-container">
+    <!-- RTL comments track -->
+    <div class="marquee-track rtl-track" dir="rtl">
+      {#each comments.filter(c => c.direction === 'rtl') as comment, index}
+        <span class="comment-item rtl-text">
+          {comment.text}
+        </span>
+        {#if index < comments.filter(c => c.direction === 'rtl').length - 1}
+          <span class="comment-separator">•</span>
+        {/if}
+      {/each}
+    </div>
+  </div>
+</div>
   </div>
 </div>
 
@@ -649,7 +686,29 @@
     color: #dc3545;
     margin-top: 12px;
   }
+  /* Alternative marquee styles */
+  .ltr-track {
+    animation: marqueeScrollLTR 20s linear infinite;
+  }
 
+  @keyframes marqueeScrollLTR {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .rtl-track {
+    animation: marqueeScrollRTL 20s linear infinite;
+  }
+
+  @keyframes marqueeScrollRTL {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(50%); }
+  }
+
+  .ltr-track:hover,
+  .rtl-track:hover {
+    animation-play-state: paused;
+  }
   /* Mobile */
   @media (max-width: 480px) {
     .wave-title {
