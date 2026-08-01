@@ -8,6 +8,8 @@
   import { boostWave, getTokenBalance } from '$lib/services/token-service'
   import type { WaveWithLike } from '$lib/services/wave-service'
   import AudioPlayer from './AudioPlayer.svelte'
+  import { toggleReaction, type ReactionSummary } from '$lib/services/wave-service'
+    import ReactionPicker from '$lib/components/ui/ReactionPicker.svelte'
 
   // Icon imports
   import {
@@ -47,6 +49,8 @@
   let boostSuccess = $state(false)
   let isPlaying = $state(false)
   let isFollowing = $state(false)
+   let waveReactions = $state<ReactionSummary[]>([])
+  let userReaction = $state<string | null>(null)
 
   // Comment state
   let showCommentInput = $state(false)
@@ -124,6 +128,104 @@
     }
   }
 
+ // ✅ بارگذاری ریکشن‌ها
+  async function loadReactions() {
+    if (!wave.id) return
+    
+    try {
+      const [reactions, userReact] = await Promise.all([
+        getWaveReactions(wave.id),
+        currentUserId ? getUserReaction(wave.id, currentUserId) : null
+      ])
+      
+      waveReactions = reactions
+      userReaction = userReact
+    } catch (err) {
+      console.error('Error loading reactions:', err)
+    }
+  }
+
+  // ✅ تابع مدیریت ریکشن (فقط یک ریکشن)
+  async function handleReaction(emoji: string) {
+    if (!currentUser) {
+      goto('/auth/login')
+      return
+    }
+
+    if (isLiking) return
+    isLiking = true
+
+    try {
+      const result = await toggleReaction(wave.id, currentUser.id, emoji)
+      
+      if (result.success) {
+        // ✅ به‌روزرسانی UI
+        if (result.action === 'removed') {
+          // ریکشن حذف شد
+          userReaction = null
+          // کاهش تعداد
+          const idx = waveReactions.findIndex(r => r.emoji === emoji)
+          if (idx !== -1) {
+            waveReactions[idx].count--
+            if (waveReactions[idx].count <= 0) {
+              waveReactions.splice(idx, 1)
+            }
+            waveReactions = [...waveReactions] // Trigger reactivity
+          }
+        } else if (result.action === 'added') {
+          // ریکشن جدید اضافه شد
+          userReaction = emoji
+          const existing = waveReactions.find(r => r.emoji === emoji)
+          if (existing) {
+            existing.count++
+          } else {
+            waveReactions.push({ emoji, count: 1 })
+          }
+          waveReactions = [...waveReactions] // Trigger reactivity
+        } else if (result.action === 'changed') {
+          // ریکشن تغییر کرد (قبلی حذف، جدید اضافه)
+          // باید ریکشن قبلی رو پیدا کنیم و کم کنیم
+          const oldEmoji = userReaction
+          userReaction = emoji
+          
+          if (oldEmoji) {
+            const oldIdx = waveReactions.findIndex(r => r.emoji === oldEmoji)
+            if (oldIdx !== -1) {
+              waveReactions[oldIdx].count--
+              if (waveReactions[oldIdx].count <= 0) {
+                waveReactions.splice(oldIdx, 1)
+              }
+            }
+          }
+          
+          const newIdx = waveReactions.findIndex(r => r.emoji === emoji)
+          if (newIdx !== -1) {
+            waveReactions[newIdx].count++
+          } else {
+            waveReactions.push({ emoji, count: 1 })
+          }
+          
+          waveReactions = [...waveReactions] // Trigger reactivity
+        }
+      }
+    } catch (err) {
+      console.error('Error reacting:', err)
+      alert('خطا در ثبت ریکشن. لطفاً دوباره تلاش کنید.')
+    } finally {
+      isLiking = false
+    }
+  }
+
+    onMount(() => {
+    loadReactions()
+  })
+
+  // وقتی کاربر عوض شد، ریکشن‌ها رو دوباره بارگذاری کن
+  $effect(() => {
+    if (currentUserId) {
+      loadReactions()
+    }
+  })
   // Load all comments for modal
   async function loadAllComments() {
     if (!wave.id) return
@@ -422,28 +524,45 @@
         </button>
       </div>
       
-      <div class="wave-stats">
+<!-- جایگزین دکمه لایک با ریکشن پیکر -->
+<div class="wave-stats">
+  <!-- ✅ ریکشن پیکر -->
+  <div class="reaction-section">
+      <!-- ✅ Reaction Picker (فقط یک ریکشن) -->
+  <ReactionPicker
+    currentReaction={userReaction}
+    onSelect={(emoji) => handleReaction(emoji)}
+  />
+  
+  <!-- ✅ نمایش ریکشن‌های جمعی (مرتب‌شده) -->
+  {#if waveReactions.length > 0}
+    <div class="reaction-summary">
+      {#each waveReactions as reaction (reaction.emoji)}
         <button 
-          class="like-btn {wave.isLiked ? 'liked' : ''}" 
-          onclick={handleLike}
-          disabled={isLiking}
+          class="reaction-badge {userReaction === reaction.emoji ? 'user-reacted' : ''}"
+          onclick={() => handleReaction(reaction.emoji)}
         >
-          <Heart size={16} fill={wave.isLiked ? '#ef4444' : 'none'} />
-          <span>{formatNumber(wave.likes_count || 0)}</span>
+          {reaction.emoji} {reaction.count}
         </button>
-        <span>
-          <Smile size={16} />
-          999
-        </span>
-        <span>
-          <Frown size={16} />
-          10
-        </span>
-        <span>
-          <Flame size={16} color="#f59e0b" />
-          1
-        </span>
-      </div>
+      {/each}
+    </div>
+  {/if}
+  </div>
+  
+  <!-- سایر آمار -->
+  <!-- <span>
+    <Smile size={16} />
+    999
+  </span>
+  <span>
+    <Frown size={16} />
+    10
+  </span>
+  <span>
+    <Flame size={16} color="#f59e0b" />
+    1
+  </span> -->
+</div>
     </div>
 
     <!-- Real Comments Marquee - Clickable -->
@@ -852,7 +971,42 @@
     color: #65676b;
     align-items: center;
   }
+/* Reaction Section */
+.reaction-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
+.reaction-summary {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.reaction-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 10px;
+  border-radius: 16px;
+  background: #f1f5f9;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid transparent;
+}
+
+.reaction-badge:hover {
+  background: #e2e8f0;
+  transform: scale(1.05);
+}
+
+.reaction-badge.user-reacted {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
   .wave-stats span {
     display: flex;
     align-items: center;
