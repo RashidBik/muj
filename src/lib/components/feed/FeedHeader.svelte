@@ -15,7 +15,8 @@
     Settings,
     Home,
     Menu,
-    Sparkles
+    Sparkles,
+    MessageCircleIcon
   } from 'lucide-svelte'
 
   let { currentUser, onSignOut }: {
@@ -23,7 +24,7 @@
     onSignOut: () => void
   } = $props()
 
-  let unreadCount = $state(0)
+  let unreadCount = $state(1)
   let isMenuOpen = $state(false)
 
   function goToMyProfile() {
@@ -78,97 +79,109 @@
   })
 </script>
 
-<header class="header">
-  <div class="header-left">
-    <!-- Logo -->
-    <div class="logo" onclick={goToHome}>
-      <Waves size={28} />
-      <span class="logo-text">موج</span>
-      <span class="logo-badge">Beta</span>
+<!-- Fixed sticky header container -->
+<div class="sticky-topbar">
+  <!-- Main Header -->
+  <header class="header">
+    <div class="header-left">
+      <!-- Logo -->
+      <div class="logo" onclick={goToHome}>
+        <Waves size={28} />
+        <span class="logo-text">موج</span>
+        <span class="logo-badge">Beta</span>
+      </div>
     </div>
-  </div>
 
-  <div class="header-right">
-    {#if currentUser}
-      <!-- Search Button -->
-      <button class="icon-btn search-btn" onclick={goToSearch} title="جستجو">
-        <Search size={20} />
-        <span class="btn-label">جستجو</span>
-      </button>
-
-      <!-- Notifications Button -->
-      <button class="icon-btn notification-btn" onclick={goToNotifications} title="اعلان‌ها">
-        <Bell size={20} />
-        {#if unreadCount > 0}
-          <span class="badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
-        {/if}
-        <span class="btn-label">اعلان‌ها</span>
-      </button>
-
-      <!-- Profile Dropdown -->
-      <div class="profile-dropdown">
-        <button class="profile-btn" onclick={toggleMenu} title="پروفایل من">
-          <div class="profile-avatar">
-            {#if currentUser.avatar}
-              <img src={currentUser.avatar} alt={currentUser.name} class="avatar-img" />
-            {:else}
-              <UserIcon size={20} />
-            {/if}
-          </div>
-          <span class="profile-name">{currentUser.name}</span>
-          <span class="dropdown-arrow">▾</span>
+    <div class="header-right">
+      {#if currentUser}
+        <!-- Search Button -->
+        <button class="icon-btn search-btn" onclick={goToSearch} title="جستجو">
+          <Search size={20} />
+          <span class="btn-label">جستجو</span>
         </button>
 
-        <!-- Dropdown Menu -->
-        {#if isMenuOpen}
-          <div class="dropdown-menu">
-            <div class="dropdown-item" onclick={goToMyProfile}>
-              <UserIcon size={16} />
-              <span>پروفایل من</span>
-            </div>
-            <div class="dropdown-item" onclick={goToHome}>
-              <Home size={16} />
-              <span>خانه</span>
-            </div>
-            <div class="dropdown-divider"></div>
-            <div class="dropdown-item logout-item" onclick={onSignOut}>
-              <LogOut size={16} />
-              <span>خروج</span>
-            </div>
-          </div>
-        {/if}
-      </div>
-    {:else}
-      <!-- Guest Actions -->
-      <button class="login-btn" onclick={() => goto('/auth/login')}>
-        <LogIn size={18} />
-        <span>ورود</span>
-      </button>
-      <button class="signup-btn" onclick={() => goto('/auth/register')}>
-        <Sparkles size={18} />
-        <span>ثبت نام</span>
-      </button>
-    {/if}
-  </div>
-</header>
+        <span class="profile-name">{currentUser.name}</span>
+      {:else}
+        <!-- Guest Actions -->
+        <button class="login-btn" onclick={() => goto('/auth/login')}>
+          <LogIn size={18} />
+          <span>ورود</span>
+        </button>
+        <button class="signup-btn" onclick={() => goto('/auth/register')}>
+          <Sparkles size={18} />
+          <span>ثبت نام</span>
+        </button>
+      {/if}
+    </div>
+  </header>
 
-<!-- Click outside to close dropdown -->
-{#if isMenuOpen}
-  <div class="dropdown-overlay" onclick={() => isMenuOpen = false}></div>
-{/if}
+  <!-- Bottom Navigation Bar -->
+  <div class="topbar-center flex items-center justify-between w-full px-4 py-2 bg-white border-b border-gray-200 ">
+    <!-- Home Button -->
+    <button 
+      class="icon-btn relative flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors duration-200" 
+      onclick={goToHome} 
+      title="خانه"
+    >
+      <Home size={24} color="#6366f1" class="text-gray-700" />
+    </button>
+ 
+    <!-- Messages Button -->
+    <button 
+      class="icon-btn active relative flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors duration-200" 
+      onclick={goToNotifications} 
+      title="پیام‌ها"
+    >
+      <MessageCircleIcon size={24} class="text-gray-700" />
+      {#if unreadCount > 0}
+        <span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 border-2 border-white">
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      {/if}
+    </button>
+  
+    <!-- Notifications Button -->
+    <button 
+      class="icon-btn relative flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors duration-200" 
+      onclick={goToNotifications} 
+      title="اعلان‌ها"
+    >
+      <Bell size={24} class="text-gray-700" />
+      {#if unreadCount > 0}
+        <span class="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5 border-2 border-white">
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      {/if}
+    </button>
+
+    <!-- Profile Button -->
+    <button 
+      class="icon-btn relative flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors duration-200" 
+      onclick={goToMyProfile} 
+      title="پروفایل"
+    >
+      <UserIcon size={24} class="text-gray-700" />
+    </button>
+  </div>
+</div>
 
 <style>
+  /* Fixed sticky container */
+  .sticky-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: white;
+  }
+
   .header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 12px 20px;
     background: #ffffff;
-    border-bottom: 1px solid #eef2f6;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    backdrop-filter: blur(12px);
+    /* border-bottom: 1px solid #eef2f6; */
+    /* backdrop-filter: blur(12px); */
     background: rgba(255, 255, 255, 0.92);
     transition: box-shadow 0.3s ease;
   }
@@ -482,6 +495,12 @@
     transform: scale(0.95);
   }
 
+  /* Topbar Center - Bottom Navigation */
+  .topbar-center {
+    background: white;
+    border-bottom: 1px solid #eef2f6;
+  }
+
   /* Responsive */
   @media (max-width: 768px) {
     .header {
@@ -525,6 +544,19 @@
 
     .login-btn span {
       display: none;
+    }
+
+    .topbar-center {
+      padding: 8px 12px;
+    }
+
+    .topbar-center .icon-btn {
+      padding: 6px 8px;
+    }
+
+    .topbar-center .icon-btn :global(svg) {
+      width: 20px;
+      height: 20px;
     }
   }
 
@@ -575,6 +607,27 @@
       min-width: 160px;
       left: auto;
       right: 0;
+    }
+
+    .topbar-center {
+      padding: 6px 8px;
+    }
+
+    .topbar-center .icon-btn {
+      padding: 4px 6px;
+    }
+
+    .topbar-center .icon-btn :global(svg) {
+      width: 18px;
+      height: 18px;
+    }
+
+    .topbar-center .absolute {
+      min-width: 16px !important;
+      height: 16px !important;
+      font-size: 8px !important;
+      top: -2px !important;
+      right: -2px !important;
     }
   }
 </style>
