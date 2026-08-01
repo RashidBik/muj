@@ -1,5 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { supabase } from '$lib/client/supabase'
+  
+  // Icon imports
+  import {
+    Play,
+    Pause,
+    Minus,
+    Plus,
+    Zap,
+    Activity
+  } from 'lucide-svelte'
 
   let {
     audioUrl,
@@ -21,20 +32,19 @@
   let dataArray: Uint8Array | null = null
   let gainNode: GainNode | null = null
   
-  // Oscillators for visualization
-  let oscillators: OscillatorNode[] = []
-  let oscillatorGains: GainNode[] = []
+  // Actual audio element for playback
+  let audioElement: HTMLAudioElement | null = null
+  let audioSource: MediaElementAudioSourceNode | null = null
   
   // Playback state
   let isPlaying = $state(false)
-  let isLoading = $state(false)
   let animationId: number | null = null
+  let isAudioLoaded = $state(false)
   
-  // Speed/pitch control
+  // Speed control
   let speedFactor = $state(1.0)
   const MIN_SPEED = 0.4
   const MAX_SPEED = 2.5
-  let baseFrequencies = [110, 220, 165] // A2, A3, E3
   
   // Canvas ref
   let canvas: HTMLCanvasElement | null = null
@@ -43,9 +53,12 @@
   // DOM refs for labels
   let freqLabel: HTMLElement | null = null
   let statusLabel: HTMLElement | null = null
-  let pitchLabel: HTMLElement | null = null
   let speedDisplay: HTMLElement | null = null
   let speedDot: HTMLElement | null = null
+
+  // Real comments from database
+  let comments = $state<any[]>([])
+  let commentsLoaded = $state(false)
 
   // Size constants
   const SIZE = 500
@@ -68,6 +81,44 @@
     if (isPlaying) stopVisualizer()
   }
 
+  // Load real comments
+  async function loadComments() {
+    if (!waveId) return
+    
+    try {
+      const { data, error } = await supabase
+        .from('comments')
+        .select(`
+          content,
+          user:users(
+            name,
+            username,
+            avatar
+          )
+        `)
+        .eq('wave_id', waveId)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        comments = data
+      } else {
+        // Fallback comments if none exist
+        comments = [
+          { content: 'اولین نفری باشید که نظر می‌دهد!', user: { name: 'سیستم' } }
+        ]
+      }
+      commentsLoaded = true
+    } catch (err) {
+      console.error('Error loading comments:', err)
+      comments = [
+        { content: 'نظری برای این موج ثبت نشده است', user: { name: 'سیستم' } }
+      ]
+    }
+  }
+
   // Initialize canvas
   onMount(() => {
     if (canvas) {
@@ -76,40 +127,72 @@
       ctx = canvas.getContext('2d')
       drawEmptyState()
     }
+    
+    // Load real comments
+    loadComments()
+    
+    // Initialize audio element with the actual audio URL
+    if (audioUrl) {
+      audioElement = new Audio(audioUrl)
+      audioElement.crossOrigin = 'anonymous'
+      audioElement.preload = 'metadata'
+      
+      audioElement.addEventListener('loadedmetadata', () => {
+        isAudioLoaded = true
+        if (statusLabel) statusLabel.textContent = 'ready'
+      })
+      
+      audioElement.addEventListener('error', () => {
+        console.error('Error loading audio')
+        if (statusLabel) statusLabel.textContent = 'error'
+      })
+      
+      audioElement.addEventListener('ended', () => {
+        stopVisualizer()
+      })
+    }
   })
 
   // Cleanup on destroy
   onDestroy(() => {
+    if (audioElement) {
+      audioElement.pause()
+      audioElement.src = ''
+    }
     if (audioCtx) {
       audioCtx.close()
     }
     if (animationId) {
       cancelAnimationFrame(animationId)
     }
-    oscillators.forEach(o => {
-      try { o.stop(); o.disconnect() } catch(e) {}
-    })
-    oscillatorGains.forEach(g => {
-      try { g.disconnect() } catch(e) {}
-    })
   })
 
-  // Initialize audio context
+  // Initialize audio context with audio element
   function initAudio() {
     if (audioCtx) return audioCtx
+    if (!audioElement) {
+      console.warn('No audio element')
+      return null
+    }
+    
     try {
       audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      
+      audioSource = audioCtx.createMediaElementSource(audioElement)
+      
       analyser = audioCtx.createAnalyser()
       analyser.fftSize = 256
       analyser.smoothingTimeConstant = 0.7
       
       gainNode = audioCtx.createGain()
-      gainNode.gain.value = 0.22
+      gainNode.gain.value = 1.0
       
+      audioSource.connect(analyser)
       analyser.connect(gainNode)
       gainNode.connect(audioCtx.destination)
       
       dataArray = new Uint8Array(analyser.frequencyBinCount)
+      
       return audioCtx
     } catch (err) {
       console.warn('WebAudio not supported', err)
@@ -117,73 +200,13 @@
     }
   }
 
-  // Build oscillators
-  function buildOscillators() {
-    if (!audioCtx) return
-    
-    oscillators.forEach(o => { 
-      try { o.stop(); o.disconnect() } catch(e) {} 
-    })
-    oscillatorGains.forEach(g => { 
-      try { g.disconnect() } catch(e) {} 
-    })
-    oscillators = []
-    oscillatorGains = []
-
-    const types = ['sine', 'sine', 'sawtooth']
-    const freqs = baseFrequencies.map(f => f * speedFactor)
-    const gains = [0.5, 0.35, 0.2]
-    const detunes = [-2, 3, -1]
-
-    for (let i = 0; i < 3; i++) {
-      const osc = audioCtx.createOscillator()
-      osc.type = types[i] as OscillatorType
-      osc.frequency.value = freqs[i]
-      osc.detune.value = detunes[i]
-      
-      const g = audioCtx.createGain()
-      g.gain.value = gains[i]
-      
-      osc.connect(g)
-      g.connect(analyser!)
-      
-      osc.start(0)
-      
-      oscillators.push(osc)
-      oscillatorGains.push(g)
-    }
-  }
-
-  // Update pitch
-  function updatePitch() {
-    if (!oscillators.length) return
-    const freqs = baseFrequencies.map(f => f * speedFactor)
-    oscillators.forEach((osc, idx) => {
-      if (idx < freqs.length) {
-        osc.frequency.setTargetAtTime(freqs[idx], audioCtx!.currentTime, 0.05)
-      }
-    })
-    updatePitchLabel()
-    if (speedDisplay) speedDisplay.textContent = speedFactor.toFixed(1) + '×'
-    if (speedDot) {
-      if (Math.abs(speedFactor - 1.0) < 0.01) {
-        speedDot.className = 'speed-dot inactive'
-      } else {
-        speedDot.className = 'speed-dot'
-      }
-    }
-  }
-
-  // Update UI labels
-  function updatePitchLabel() {
-    if (!pitchLabel) return
-    const detune = (speedFactor - 1.0) * 100
-    pitchLabel.textContent = `🎵 pitch: ${speedFactor.toFixed(2)}× (${detune > 0 ? '+' : ''}${Math.round(detune)}¢)`
-  }
-
   // Start visualizer
   function startVisualizer() {
     if (isPlaying) return
+    if (!audioElement || !audioUrl) {
+      console.warn('No audio URL')
+      return
+    }
     
     const ctxAudio = initAudio()
     if (!ctxAudio) {
@@ -193,8 +216,10 @@
     
     if (ctxAudio.state === 'suspended') {
       ctxAudio.resume().then(() => {
-        buildOscillators()
-        updatePitch()
+        if (audioElement) {
+          audioElement.currentTime = 0
+          audioElement.play().catch(err => console.warn('Play error', err))
+        }
         isPlaying = true
         updateUI(true)
         drawVisualizer()
@@ -202,8 +227,10 @@
       return
     }
     
-    if (oscillators.length === 0) buildOscillators()
-    updatePitch()
+    if (audioElement) {
+      audioElement.currentTime = 0
+      audioElement.play().catch(err => console.warn('Play error', err))
+    }
     isPlaying = true
     updateUI(true)
     drawVisualizer()
@@ -222,27 +249,23 @@
       ctx.clearRect(0, 0, SIZE, SIZE)
       drawEmptyState()
     }
-    oscillators.forEach(o => { 
-      try { o.stop(); o.disconnect() } catch(e) {} 
-    })
-    oscillators = []
-    oscillatorGains.forEach(g => { 
-      try { g.disconnect() } catch(e) {} 
-    })
-    oscillatorGains = []
+    if (audioElement) {
+      audioElement.pause()
+    }
     if (audioCtx) {
       audioCtx.close().then(() => {
         audioCtx = null
         analyser = null
+        audioSource = null
       }).catch(() => {})
     }
-    if (statusLabel) statusLabel.textContent = '⏸ stopped'
+    if (statusLabel) statusLabel.textContent = 'stopped'
   }
 
   // Update UI
   function updateUI(playing: boolean) {
     if (statusLabel) {
-      statusLabel.textContent = playing ? '▶ playing' : '⏸ stopped'
+      statusLabel.textContent = playing ? 'playing' : 'stopped'
     }
   }
 
@@ -283,7 +306,7 @@
     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i]
     const avg = sum / dataArray.length
     const freqDisplay = Math.round(20 + (avg / 255) * 80)
-    if (freqLabel) freqLabel.textContent = `⚡ ${freqDisplay} Hz`
+    if (freqLabel) freqLabel.textContent = `${freqDisplay} Hz`
     
     const center = SIZE/2
     const maxRadius = SIZE/2 - 20
@@ -293,7 +316,6 @@
     
     ctx.clearRect(0, 0, SIZE, SIZE)
     
-    // Subtle glow
     const gradient = ctx.createRadialGradient(center, center, 0, center, center, maxRadius)
     gradient.addColorStop(0, 'rgba(99, 102, 241, 0.08)')
     gradient.addColorStop(1, 'rgba(15, 23, 42, 0)')
@@ -302,7 +324,6 @@
     ctx.arc(center, center, maxRadius, 0, Math.PI * 2)
     ctx.fill()
     
-    // Draw bars
     for (let i = 0; i < barCount; i++) {
       const dataIndex = Math.floor((i / barCount) * dataArray.length)
       const value = dataArray[dataIndex] || 0
@@ -329,7 +350,6 @@
       ctx.stroke()
     }
     
-    // Center dot
     const grad2 = ctx.createRadialGradient(center-10, center-10, 5, center, center, 50)
     grad2.addColorStop(0, 'rgba(255,255,255,0.08)')
     grad2.addColorStop(1, 'rgba(255,255,255,0)')
@@ -358,45 +378,15 @@
     if (newSpeed === speedFactor) return
     speedFactor = newSpeed
     if (speedDisplay) speedDisplay.textContent = speedFactor.toFixed(1) + '×'
-    if (isPlaying && oscillators.length > 0) {
-      updatePitch()
-    } else {
-      updatePitchLabel()
-      if (speedDisplay) speedDisplay.textContent = speedFactor.toFixed(1) + '×'
-      if (speedDot) {
-        if (Math.abs(speedFactor - 1.0) < 0.01) {
-          speedDot.className = 'speed-dot inactive'
-        } else {
-          speedDot.className = 'speed-dot'
-        }
+    if (isPlaying && audioElement) {
+      audioElement.playbackRate = speedFactor
+    }
+    if (speedDot) {
+      if (Math.abs(speedFactor - 1.0) < 0.01) {
+        speedDot.className = 'speed-dot inactive'
+      } else {
+        speedDot.className = 'speed-dot'
       }
-    }
-  }
-
-  // Shift pitch
-  function shiftPitch(direction: number) {
-    const factor = direction > 0 ? 1.25 : 0.8
-    baseFrequencies = baseFrequencies.map(f => {
-      let newF = f * factor
-      if (newF < 40) newF = 40
-      if (newF > 800) newF = 800
-      return Math.round(newF)
-    })
-    if (isPlaying && oscillators.length > 0) {
-      oscillators.forEach(o => { try { o.stop(); o.disconnect() } catch(e) {} })
-      oscillatorGains.forEach(g => { try { g.disconnect() } catch(e) {} })
-      oscillators = []
-      oscillatorGains = []
-      buildOscillators()
-      updatePitch()
-    } else {
-      const avgFreq = baseFrequencies.reduce((a,b) => a+b, 0) / baseFrequencies.length
-      if (pitchLabel) pitchLabel.textContent = `🎵 pitch: ${Math.round(avgFreq)} Hz base`
-    }
-    if (isPlaying) updatePitchLabel()
-    else {
-      const avgFreq = baseFrequencies.reduce((a,b) => a+b, 0) / baseFrequencies.length
-      if (pitchLabel) pitchLabel.textContent = `🎵 pitch: ${Math.round(avgFreq)} Hz base`
     }
   }
 
@@ -406,14 +396,6 @@
     if (e.key === ' ' || e.key === 'Space') { 
       e.preventDefault() 
       togglePlay() 
-    }
-    if (e.key === 'ArrowRight') { 
-      e.preventDefault() 
-      shiftPitch(1) 
-    }
-    if (e.key === 'ArrowLeft') { 
-      e.preventDefault() 
-      shiftPitch(-1) 
     }
     if (e.key === 'ArrowUp') { 
       e.preventDefault() 
@@ -432,87 +414,72 @@
 </script>
 
 <div class="audio-player-container">
- <div></div>
   <div class="controll-container">
-
-        <div class="visualizer-wrapper">
-    <canvas 
-      bind:this={canvas} 
-      class="visualizer-canvas"
-      onclick={togglePlay}
-      width="500" 
-      height="500"
-    ></canvas>
-    
-    <!-- Play/Pause overlay button -->
-    <button 
-      class="play-toggle-btn" 
-      onclick={(e) => { e.stopPropagation(); togglePlay() }}
-      aria-label={isPlaying ? 'Pause' : 'Play'}
-    >
-      {#if isPlaying}
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="white">
-          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-        </svg>
-      {:else}
-        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="white">
-          <path d="M8 5v14l11-7z" />
-        </svg>
-      {/if}
-    </button>
-  </div>
-
-  <!-- Controls -->
-  <div class="controls">
-    <div class="controls-row">
-      <!-- Backward -->
-      <button class="control-btn" onclick={() => shiftPitch(-1)} title="Skip backward (change pitch down)">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
-        </svg>
-      </button>
-
-      <!-- Play/Stop -->
-      <button class="control-btn play-btn" onclick={() => togglePlay()}>
+    <div class="visualizer-wrapper">
+      <canvas 
+        bind:this={canvas} 
+        class="visualizer-canvas"
+        onclick={togglePlay}
+        width="500" 
+        height="500"
+      ></canvas>
+      
+      <button 
+        class="play-toggle-btn" 
+        onclick={(e) => { e.stopPropagation(); togglePlay() }}
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+      >
         {#if isPlaying}
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-          </svg>
-          <span>Stop</span>
+          <Pause size={28} />
         {:else}
-          <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-          <span>Play</span>
+          <Play size={28} />
         {/if}
       </button>
+    </div>
 
-      <!-- Forward -->
-      <button class="control-btn" onclick={() => shiftPitch(1)} title="Skip forward (change pitch up)">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M13 6v12l8.5-6L13 6zM4 18l8.5-6L4 6v12z"/>
-        </svg>
-      </button>
-
-      <!-- Speed control -->
-      <div class="speed-control">
-        <span class="speed-label">SPEED</span>
-        <button class="speed-btn" onclick={() => changeSpeed(-0.1)}>−</button>
-        <span class="speed-display" bind:this={speedDisplay}>1.0×</span>
-        <button class="speed-btn" onclick={() => changeSpeed(0.1)}>+</button>
-        <span class="speed-dot inactive" bind:this={speedDot}></span>
+    <div class="controls">
+      <div class="controls-row">
+        <div class="speed-control">
+          <span class="speed-label">SPEED</span>
+          <button class="speed-btn" onclick={() => changeSpeed(-0.1)}>
+            <Minus size={14} />
+          </button>
+          <span class="speed-display" bind:this={speedDisplay}>1.0×</span>
+          <button class="speed-btn" onclick={() => changeSpeed(0.1)}>
+            <Plus size={14} />
+          </button>
+          <span class="speed-dot inactive" bind:this={speedDot}></span>
+        </div>
       </div>
-    </div>
-
-    <!-- Info labels -->
-    <div class="info-labels">
-      <span class="badge" bind:this={freqLabel}>⚡ 44 Hz</span>
-      <span class="badge" bind:this={statusLabel}>⏸ stopped</span>
-      <span class="badge" bind:this={pitchLabel}>🎵 pitch: 0</span>
+      
+      <!-- Real comments marquee - LARGER TEXT -->
+      {#if comments.length > 0}
+        <div class="comments-marquee">
+          <div class="marquee-track">
+            {#each comments as comment, index}
+              <span class="comment-item">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.content}</span>
+                {#if index < comments.length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+            <!-- Duplicate for seamless loop -->
+            {#each comments as comment, index}
+              <span class="comment-item">
+                <span class="comment-user">{comment.user?.name || 'ناشناس'}:</span>
+                <span class="comment-text">{comment.content}</span>
+                {#if index < comments.length - 1}
+                  <span class="comment-separator">•</span>
+                {/if}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
-  </div>
- 
 </div>
 
 <style>
@@ -523,22 +490,31 @@
     width: 100%;
     height: 100%;
     display: flex;
-    align-items: space-between;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: center;
     background: rgba(15, 23, 42, 0.75);
     backdrop-filter: blur(12px);
   }
+
   .controll-container {
     display: flex;
     flex-direction: column;
-    padding-top: 1rem;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(0.5rem, 2vh, 1rem);
+    padding: clamp(0.5rem, 2vh, 1rem);
+    width: 100%;
+    max-width: 450px;
+    height: 100%;
+    max-height: 600px;
   }
 
   .visualizer-wrapper {
     position: relative;
-    width: min(16vw, 60vh, 350px);
+    width: clamp(140px, min(40vw, 40vh), 280px);
     aspect-ratio: 1/1;
     margin: 0 auto;
+    flex-shrink: 0;
   }
 
   .visualizer-wrapper::after {
@@ -578,8 +554,8 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 56px;
-    height: 56px;
+    width: clamp(40px, 10vw, 52px);
+    height: clamp(40px, 10vw, 52px);
     border-radius: 50%;
     border: none;
     background: rgba(255,255,255,0.15);
@@ -590,6 +566,7 @@
     justify-content: center;
     transition: all 0.3s ease;
     box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    color: white;
   }
 
   .play-toggle-btn:hover {
@@ -597,13 +574,17 @@
     background: rgba(255,255,255,0.25);
   }
 
+  .play-toggle-btn :global(svg) {
+    width: clamp(18px, 5vw, 28px);
+    height: clamp(18px, 5vw, 28px);
+  }
+
   .controls {
-    margin-top: 1rem;
     width: 100%;
-    max-width: 400px;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: clamp(0.3rem, 1vh, 0.6rem);
+    flex-shrink: 0;
   }
 
   .controls-row {
@@ -611,74 +592,32 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 0.5rem;
-  }
-
-  .control-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: 9999px;
-    border: 1px solid rgba(255,255,255,0.15);
-    background: rgba(255,255,255,0.08);
-    backdrop-filter: blur(4px);
-    color: rgba(255,255,255,0.8);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    font-size: 0.875rem;
-    font-weight: 500;
-  }
-
-  .control-btn:hover {
-    background: rgba(255,255,255,0.16);
-    transform: scale(1.05);
-  }
-
-  .control-btn:active {
-    transform: scale(0.92);
-  }
-
-  .play-btn {
-    background: linear-gradient(135deg, #4f46e5, #7c3aed);
-    padding: 0.5rem 1.5rem;
-    box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);
-    color: white;
-    border: none;
-  }
-
-  .play-btn:hover {
-    transform: scale(1.04);
-    box-shadow: 0 8px 20px rgba(79, 70, 229, 0.6);
-  }
-
-  .play-btn:active {
-    transform: scale(0.94);
+    gap: clamp(0.2rem, 0.5vw, 0.4rem);
   }
 
   .speed-control {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: clamp(0.1rem, 0.3vw, 0.2rem);
     background: rgba(255,255,255,0.06);
     backdrop-filter: blur(4px);
     border: 1px solid rgba(255,255,255,0.08);
-    padding: 0.25rem 0.5rem;
+    padding: clamp(0.1rem, 0.3vh, 0.2rem) clamp(0.2rem, 0.5vw, 0.4rem);
     border-radius: 9999px;
+    flex-shrink: 0;
   }
 
   .speed-label {
     color: rgba(255,255,255,0.5);
-    font-size: 0.625rem;
+    font-size: clamp(0.4rem, 1vw, 0.55rem);
     font-weight: 600;
     letter-spacing: 0.05em;
-    margin-right: 0.25rem;
+    margin-right: clamp(0.05rem, 0.2vw, 0.15rem);
   }
 
   .speed-btn {
-    width: 28px;
-    height: 28px;
+    width: clamp(16px, 4vw, 24px);
+    height: clamp(16px, 4vw, 24px);
     border-radius: 50%;
     border: none;
     background: rgba(255,255,255,0.1);
@@ -687,29 +626,39 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
-    font-size: 0.875rem;
     transition: all 0.15s ease;
+    flex-shrink: 0;
   }
 
   .speed-btn:hover {
     background: rgba(255,255,255,0.2);
   }
 
+  .speed-btn:active {
+    transform: scale(0.9);
+  }
+
+  .speed-btn :global(svg) {
+    width: clamp(8px, 2vw, 14px);
+    height: clamp(8px, 2vw, 14px);
+  }
+
   .speed-display {
     color: rgba(255,255,255,0.9);
     font-family: monospace;
-    font-size: 0.75rem;
-    width: 40px;
+    font-size: clamp(0.45rem, 1.2vw, 0.7rem);
+    width: clamp(24px, 6vw, 36px);
     text-align: center;
+    flex-shrink: 0;
   }
 
   .speed-dot {
-    width: 6px;
-    height: 6px;
+    width: clamp(3px, 0.8vw, 5px);
+    height: clamp(3px, 0.8vw, 5px);
     border-radius: 9999px;
     background: #4ade80;
     transition: all 0.2s;
+    flex-shrink: 0;
   }
 
   .speed-dot.inactive {
@@ -717,68 +666,219 @@
     opacity: 0.4;
   }
 
-  .info-labels {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
+  /* Real Comments Marquee - LARGER TEXT */
+  .comments-marquee {
+    width: 100%;
+    overflow: hidden;
+    padding: clamp(6px, 1vh, 10px) 0;
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.04);
+    flex-shrink: 0;
   }
 
-  .badge {
-    background: rgba(255,255,255,0.06);
-    backdrop-filter: blur(4px);
-    border: 1px solid rgba(255,255,255,0.08);
-    padding: 0.25rem 0.75rem;
-    border-radius: 9999px;
-    color: rgba(255,255,255,0.5);
-    font-size: 0.625rem;
+  .marquee-track {
+    display: inline-flex;
     white-space: nowrap;
+    gap: clamp(12px, 2vw, 20px);
+    padding: 0 clamp(12px, 2vw, 20px);
+    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+    color: rgba(255,255,255,0.6);
+    align-items: center;
+    animation: marqueeScroll 30s linear infinite;
   }
 
-  /* Responsive */
+  .marquee-track:hover {
+    animation-play-state: paused;
+  }
+
+  @keyframes marqueeScroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .comment-item {
+    display: inline-flex;
+    align-items: center;
+    gap: clamp(6px, 1vw, 10px);
+  }
+
+  .comment-user {
+    color: rgba(255,255,255,0.9);
+    font-weight: 700;
+    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+  }
+
+  .comment-text {
+    color: rgba(255,255,255,0.7);
+    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+  }
+
+  .comment-separator {
+    color: rgba(255,255,255,0.15);
+    font-size: clamp(0.85rem, 2.5vw, 1.1rem);
+  }
+
+  /* Mobile - Keep text readable */
   @media (max-width: 480px) {
+    .controll-container {
+      max-height: 100vh;
+      gap: 0.4rem;
+      padding: 0.5rem;
+    }
+
     .visualizer-wrapper {
-      width: min(70vw, 70vh, 280px);
+      width: clamp(120px, 35vw, 160px);
     }
 
     .play-toggle-btn {
-      width: 44px;
-      height: 44px;
+      width: clamp(32px, 8vw, 40px);
+      height: clamp(32px, 8vw, 40px);
     }
 
-    .play-toggle-btn svg {
-      width: 20px;
-      height: 20px;
-    }
-
-    .control-btn {
-      font-size: 0.75rem;
-      padding: 0.375rem 0.75rem;
-    }
-
-    .play-btn {
-      padding: 0.375rem 1rem;
+    .play-toggle-btn :global(svg) {
+      width: clamp(14px, 4vw, 20px);
+      height: clamp(14px, 4vw, 20px);
     }
 
     .speed-control {
-      padding: 0.125rem 0.375rem;
+      padding: 0.1rem 0.2rem;
     }
 
     .speed-btn {
-      width: 24px;
-      height: 24px;
-      font-size: 0.75rem;
+      width: 14px;
+      height: 14px;
+      min-width: 14px;
+      min-height: 14px;
+    }
+
+    .speed-btn :global(svg) {
+      width: 7px;
+      height: 7px;
     }
 
     .speed-display {
-      font-size: 0.625rem;
-      width: 32px;
+      font-size: 0.4rem;
+      width: 20px;
+      min-width: 20px;
     }
 
-    .badge {
-      font-size: 0.5rem;
-      padding: 0.125rem 0.5rem;
+    .speed-label {
+      font-size: 0.35rem;
+    }
+
+    .speed-dot {
+      width: 3px;
+      height: 3px;
+    }
+
+    .comments-marquee {
+      padding: 4px 0;
+    }
+
+    .marquee-track {
+      font-size: clamp(0.7rem, 2vw, 0.85rem);
+      gap: 8px;
+      padding: 0 10px;
+      animation-duration: 25s;
+    }
+
+    .comment-user {
+      font-size: clamp(0.7rem, 2vw, 0.85rem);
+    }
+
+    .comment-text {
+      font-size: clamp(0.7rem, 2vw, 0.85rem);
+    }
+
+    .comment-separator {
+      font-size: clamp(0.7rem, 2vw, 0.85rem);
+    }
+  }
+
+  /* Extra small phones */
+  @media (max-width: 360px) {
+    .visualizer-wrapper {
+      width: clamp(80px, 30vw, 110px);
+    }
+
+    .play-toggle-btn {
+      width: clamp(28px, 7vw, 32px);
+      height: clamp(28px, 7vw, 32px);
+    }
+
+    .play-toggle-btn :global(svg) {
+      width: clamp(12px, 3vw, 16px);
+      height: clamp(12px, 3vw, 16px);
+    }
+
+    .marquee-track {
+      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
+      animation-duration: 20s;
+    }
+
+    .comment-user {
+      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
+    }
+
+    .comment-text {
+      font-size: clamp(0.6rem, 1.8vw, 0.7rem);
+    }
+  }
+
+  /* Landscape phones */
+  @media (max-height: 500px) and (orientation: landscape) {
+    .controll-container {
+      flex-direction: row;
+      gap: 0.5rem;
+      padding: 0.3rem 0.8rem;
+      max-height: 100vh;
+    }
+
+    .visualizer-wrapper {
+      width: clamp(80px, 20vh, 120px);
+    }
+
+    .play-toggle-btn {
+      width: 28px;
+      height: 28px;
+    }
+
+    .play-toggle-btn :global(svg) {
+      width: 14px;
+      height: 14px;
+    }
+
+    .controls {
+      max-width: 200px;
+      gap: 0.2rem;
+    }
+
+    .controls-row {
+      gap: 0.15rem;
+    }
+
+    .comments-marquee {
+      padding: 2px 0;
+    }
+
+    .marquee-track {
+      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
+      animation-duration: 15s;
+      gap: 4px;
+      padding: 0 6px;
+    }
+
+    .comment-user {
+      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
+    }
+
+    .comment-text {
+      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
+    }
+
+    .comment-separator {
+      font-size: clamp(0.5rem, 1.5vw, 0.6rem);
     }
   }
 </style>

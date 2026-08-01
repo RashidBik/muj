@@ -1,4 +1,6 @@
 import { supabase } from '$lib/client/supabase'
+import { user } from '$lib/stores/user'
+import { get } from 'svelte/store'
 
 export interface Comment {
   id: string
@@ -19,9 +21,17 @@ export interface Comment {
   isLiked?: boolean
 }
 
+export interface CommentStats {
+  total: number
+  lastCommentAt: string | null
+}
+
+/**
+ * Get comments for a wave with replies and like status
+ */
 export async function getComments(waveId: string, userId?: string): Promise<Comment[]> {
   try {
-    // دریافت نظرات اصلی (بدون ریپلای)
+    // Get main comments (without replies)
     const { data, error } = await supabase
       .from('comments')
       .select(`
@@ -44,7 +54,7 @@ export async function getComments(waveId: string, userId?: string): Promise<Comm
       return []
     }
 
-    // دریافت ریپلای‌ها برای هر نظر
+    // Get replies for each comment
     const commentsWithReplies = await Promise.all(
       data.map(async (comment) => {
         const { data: replies, error: repliesError } = await supabase
@@ -63,21 +73,54 @@ export async function getComments(waveId: string, userId?: string): Promise<Comm
 
         if (repliesError) throw repliesError
 
+        // Check if user liked this comment
+        let isLiked = false
+        if (userId) {
+          const { data: likeData } = await supabase
+            .from('comment_likes')
+            .select('id')
+            .eq('comment_id', comment.id)
+            .eq('user_id', userId)
+            .maybeSingle()
+          isLiked = !!likeData
+        }
+
         return {
           ...comment,
           replies: replies || [],
-          isLiked: false // بعداً پیاده‌سازی می‌شود
+          isLiked
         }
       })
     )
 
     return commentsWithReplies
   } catch (error) {
-    console.error('خطا در دریافت نظرات:', error)
+    console.error('Error loading comments:', error)
     throw error
   }
 }
 
+/**
+ * Get comment count for a wave
+ */
+export async function getCommentCount(waveId: string): Promise<number> {
+  try {
+    const { count, error } = await supabase
+      .from('comments')
+      .select('id', { count: 'exact', head: true })
+      .eq('wave_id', waveId)
+
+    if (error) throw error
+    return count || 0
+  } catch (error) {
+    console.error('Error getting comment count:', error)
+    return 0
+  }
+}
+
+/**
+ * Add a new comment
+ */
 export async function addComment(
   waveId: string,
   authorId: string,
@@ -85,10 +128,22 @@ export async function addComment(
   parentId?: string
 ): Promise<Comment> {
   try {
+    // Validate content
+    const trimmedContent = content.trim()
+    if (!trimmedContent) {
+      throw new Error('متن نظر نمی‌تواند خالی باشد')
+    }
+    if (trimmedContent.length < 2) {
+      throw new Error('متن نظر باید حداقل ۲ کاراکتر باشد')
+    }
+    if (trimmedContent.length > 500) {
+      throw new Error('متن نظر نمی‌تواند بیشتر از ۵۰۰ کاراکتر باشد')
+    }
+
     const { data, error } = await supabase
       .from('comments')
       .insert({
-        content: content.trim(),
+        content: trimmedContent,
         wave_id: waveId,
         author_id: authorId,
         parent_id: parentId || null
@@ -105,19 +160,26 @@ export async function addComment(
       .single()
 
     if (error) throw error
+
+    // Update wave's comments count
+    await supabase.rpc('increment_wave_comments', { wave_id: waveId })
+
     return data
   } catch (error) {
-    console.error('خطا در افزودن نظر:', error)
+    console.error('Error adding comment:', error)
     throw error
   }
 }
 
+/**
+ * Delete a comment (only if user is the author)
+ */
 export async function deleteComment(commentId: string, userId: string): Promise<boolean> {
   try {
-    // بررسی اینکه کاربر نویسنده نظر است
+    // Check if user is the author
     const { data: comment, error: fetchError } = await supabase
       .from('comments')
-      .select('author_id')
+      .select('author_id, wave_id')
       .eq('id', commentId)
       .single()
 
@@ -126,15 +188,138 @@ export async function deleteComment(commentId: string, userId: string): Promise<
       throw new Error('شما اجازه حذف این نظر را ندارید')
     }
 
+    // Delete the comment
     const { error } = await supabase
       .from('comments')
       .delete()
       .eq('id', commentId)
 
     if (error) throw error
+
+    // Update wave's comments count
+    await supabase.rpc('decrement_wave_comments', { wave_id: comment.wave_id })
+
     return true
   } catch (error) {
-    console.error('خطا در حذف نظر:', error)
+    console.error('Error deleting comment:', error)
     throw error
+  }
+}
+
+/**
+ * Toggle like on a comment
+ */
+export async function toggleCommentLike(commentId: string, userId: string): Promise<boolean> {
+  try {
+    // Check if user already liked
+    const { data: existingLike, error: checkError } = await supabase
+      .from('comment_likes')
+      .select('id')
+      .eq('comment_id', commentId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (checkError) throw checkError
+
+    if (existingLike) {
+      // Unlike
+      const { error: deleteError } = await supabase
+        .from('comment_likes')
+        .delete()
+        .eq('id', existingLike.id)
+
+      if (deleteError) throw deleteError
+
+      await supabase.rpc('decrement_comment_likes', { comment_id: commentId })
+      return false
+    } else {
+      // Like
+      const { error: insertError } = await supabase
+        .from('comment_likes')
+        .insert({
+          comment_id: commentId,
+          user_id: userId
+        })
+
+      if (insertError) throw insertError
+
+      await supabase.rpc('increment_comment_likes', { comment_id: commentId })
+      return true
+    }
+  } catch (error) {
+    console.error('Error toggling comment like:', error)
+    throw error
+  }
+}
+
+/**
+ * Subscribe to new comments in real-time
+ */
+export function subscribeToComments(
+  waveId: string,
+  callback: (comment: Comment) => void
+): () => void {
+  const subscription = supabase
+    .channel(`comments:${waveId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'comments',
+        filter: `wave_id=eq.${waveId}`
+      },
+      async (payload) => {
+        // Fetch the full comment with author data
+        const { data, error } = await supabase
+          .from('comments')
+          .select(`
+            *,
+            author:users(
+              id,
+              name,
+              username,
+              avatar
+            )
+          `)
+          .eq('id', payload.new.id)
+          .single()
+
+        if (!error && data) {
+          callback(data)
+        }
+      }
+    )
+    .subscribe()
+
+  return () => {
+    subscription.unsubscribe()
+  }
+}
+
+/**
+ * Get comment stats for a wave
+ */
+export async function getCommentStats(waveId: string): Promise<CommentStats> {
+  try {
+    const { data, error } = await supabase
+      .from('comments')
+      .select('created_at')
+      .eq('wave_id', waveId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    if (error) throw error
+
+    return {
+      total: await getCommentCount(waveId),
+      lastCommentAt: data && data.length > 0 ? data[0].created_at : null
+    }
+  } catch (error) {
+    console.error('Error getting comment stats:', error)
+    return {
+      total: 0,
+      lastCommentAt: null
+    }
   }
 }
