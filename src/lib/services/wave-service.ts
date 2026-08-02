@@ -174,7 +174,7 @@ export async function toggleReaction(
   }
 }
 
-// ✅ دریافت ریکشن‌های یک موج (گروه‌بندی شده)
+// ✅ دریافت ریکشن‌های یک موج
 export async function getWaveReactions(waveId: string): Promise<ReactionSummary[]> {
   try {
     const { data, error } = await supabase
@@ -184,7 +184,6 @@ export async function getWaveReactions(waveId: string): Promise<ReactionSummary[
 
     if (error) throw error
 
-    // گروه‌بندی و شمارش
     const summary: Record<string, ReactionSummary> = {}
     data?.forEach(r => {
       if (!summary[r.emoji]) {
@@ -193,7 +192,6 @@ export async function getWaveReactions(waveId: string): Promise<ReactionSummary[
       summary[r.emoji].count++
     })
 
-    // مرتب‌سازی بر اساس تعداد (بیشترین اول)
     return Object.values(summary).sort((a, b) => b.count - a.count)
   } catch (error) {
     console.error('خطا در دریافت ریکشن‌ها:', error)
@@ -201,7 +199,7 @@ export async function getWaveReactions(waveId: string): Promise<ReactionSummary[
   }
 }
 
-// ✅ دریافت ریکشن کاربر برای یک موج (برای نمایش در UI)
+// ✅ دریافت ریکشن کاربر برای یک موج
 export async function getUserReaction(waveId: string, userId: string): Promise<string | null> {
   try {
     const { data, error } = await supabase

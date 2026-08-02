@@ -8,8 +8,8 @@
   import { boostWave, getTokenBalance } from '$lib/services/token-service'
   import type { WaveWithLike } from '$lib/services/wave-service'
   import AudioPlayer from './AudioPlayer.svelte'
-  import { toggleReaction, type ReactionSummary } from '$lib/services/wave-service'
-    import ReactionPicker from '$lib/components/ui/ReactionPicker.svelte'
+  import { toggleReaction, getWaveReactions, getUserReaction } from '$lib/services/wave-service'
+  import ReactionPicker from '$lib/components/ui/ReactionPicker.svelte'
 
   // Icon imports
   import {
@@ -49,8 +49,10 @@
   let boostSuccess = $state(false)
   let isPlaying = $state(false)
   let isFollowing = $state(false)
-   let waveReactions = $state<ReactionSummary[]>([])
-  let userReaction = $state<string | null>(null)
+
+  // ✅ مستقیماً از wave می‌خوانیم
+  let waveReactions = $derived(wave.reactions || [])
+  let userReaction = $derived(wave.userReaction || null)
 
   // Comment state
   let showCommentInput = $state(false)
@@ -85,7 +87,6 @@
     if (currentUserId) {
       userBalance = await getTokenBalance(currentUserId)
     }
-    // Load real comments
     await loadComments()
   })
 
@@ -128,24 +129,7 @@
     }
   }
 
- // ✅ بارگذاری ریکشن‌ها
-  async function loadReactions() {
-    if (!wave.id) return
-    
-    try {
-      const [reactions, userReact] = await Promise.all([
-        getWaveReactions(wave.id),
-        currentUserId ? getUserReaction(wave.id, currentUserId) : null
-      ])
-      
-      waveReactions = reactions
-      userReaction = userReact
-    } catch (err) {
-      console.error('Error loading reactions:', err)
-    }
-  }
-
-  // ✅ تابع مدیریت ریکشن (فقط یک ریکشن)
+  // ✅ تابع مدیریت ریکشن (با به‌روزرسانی wave)
   async function handleReaction(emoji: string) {
     if (!currentUser) {
       goto('/auth/login')
@@ -159,54 +143,48 @@
       const result = await toggleReaction(wave.id, currentUser.id, emoji)
       
       if (result.success) {
-        // ✅ به‌روزرسانی UI
+        // ✅ به‌روزرسانی مستقیم wave
         if (result.action === 'removed') {
-          // ریکشن حذف شد
-          userReaction = null
-          // کاهش تعداد
-          const idx = waveReactions.findIndex(r => r.emoji === emoji)
+          wave.userReaction = null
+          const idx = wave.reactions.findIndex(r => r.emoji === emoji)
           if (idx !== -1) {
-            waveReactions[idx].count--
-            if (waveReactions[idx].count <= 0) {
-              waveReactions.splice(idx, 1)
+            wave.reactions[idx].count--
+            if (wave.reactions[idx].count <= 0) {
+              wave.reactions.splice(idx, 1)
             }
-            waveReactions = [...waveReactions] // Trigger reactivity
           }
         } else if (result.action === 'added') {
-          // ریکشن جدید اضافه شد
-          userReaction = emoji
-          const existing = waveReactions.find(r => r.emoji === emoji)
+          wave.userReaction = emoji
+          const existing = wave.reactions.find(r => r.emoji === emoji)
           if (existing) {
             existing.count++
           } else {
-            waveReactions.push({ emoji, count: 1 })
+            wave.reactions.push({ emoji, count: 1 })
           }
-          waveReactions = [...waveReactions] // Trigger reactivity
         } else if (result.action === 'changed') {
-          // ریکشن تغییر کرد (قبلی حذف، جدید اضافه)
-          // باید ریکشن قبلی رو پیدا کنیم و کم کنیم
-          const oldEmoji = userReaction
-          userReaction = emoji
+          const oldEmoji = wave.userReaction
+          wave.userReaction = emoji
           
           if (oldEmoji) {
-            const oldIdx = waveReactions.findIndex(r => r.emoji === oldEmoji)
+            const oldIdx = wave.reactions.findIndex(r => r.emoji === oldEmoji)
             if (oldIdx !== -1) {
-              waveReactions[oldIdx].count--
-              if (waveReactions[oldIdx].count <= 0) {
-                waveReactions.splice(oldIdx, 1)
+              wave.reactions[oldIdx].count--
+              if (wave.reactions[oldIdx].count <= 0) {
+                wave.reactions.splice(oldIdx, 1)
               }
             }
           }
           
-          const newIdx = waveReactions.findIndex(r => r.emoji === emoji)
+          const newIdx = wave.reactions.findIndex(r => r.emoji === emoji)
           if (newIdx !== -1) {
-            waveReactions[newIdx].count++
+            wave.reactions[newIdx].count++
           } else {
-            waveReactions.push({ emoji, count: 1 })
+            wave.reactions.push({ emoji, count: 1 })
           }
-          
-          waveReactions = [...waveReactions] // Trigger reactivity
         }
+        
+        // ✅ Trigger reactivity
+        wave = { ...wave }
       }
     } catch (err) {
       console.error('Error reacting:', err)
@@ -216,16 +194,6 @@
     }
   }
 
-    onMount(() => {
-    loadReactions()
-  })
-
-  // وقتی کاربر عوض شد، ریکشن‌ها رو دوباره بارگذاری کن
-  $effect(() => {
-    if (currentUserId) {
-      loadReactions()
-    }
-  })
   // Load all comments for modal
   async function loadAllComments() {
     if (!wave.id) return
@@ -304,7 +272,6 @@
 
       if (error) throw error
 
-      // Add new comment to the list
       const newComment = {
         text: data.content,
         direction: /^[a-zA-Z0-9\s.,!?@#$%^&*()_+=\-`~]+$/.test(data.content) ? 'rtl' : 'ltr',
@@ -312,7 +279,6 @@
       }
       comments = [newComment, ...comments]
       
-      // Also add to all comments if modal is open
       if (showCommentsModal) {
         allComments = [data, ...allComments]
       }
@@ -337,13 +303,6 @@
     if (!showCommentInput) {
       commentText = ''
     }
-  }
-
-  async function handleLike() {
-    if (isLiking) return
-    isLiking = true
-    await onLike(wave.id)
-    isLiking = false
   }
 
   function goToProfile(username?: string) {
@@ -432,6 +391,31 @@
       return 'چندی پیش'
     }
   }
+
+   // ✅ فرمت زمان به صورت "مدت زمان پیش"
+  function formatTimeAgo(date: string): string {
+    try {
+      const now = new Date()
+      const created = new Date(date)
+      const diffMs = now.getTime() - created.getTime()
+      const diffMins = Math.floor(diffMs / 60000)
+      const diffHours = Math.floor(diffMs / 3600000)
+      const diffDays = Math.floor(diffMs / 86400000)
+      const diffMonths = Math.floor(diffDays / 30)
+      const diffYears = Math.floor(diffDays / 365)
+
+      if (diffMins < 1) return 'لحظاتی پیش'
+      if (diffMins < 60) return `${diffMins} دقیقه پیش`
+      if (diffHours < 24) return `${diffHours} ساعت پیش`
+      if (diffDays < 7) return `${diffDays} روز پیش`
+      if (diffDays < 30) return `${diffDays} روز پیش`
+      if (diffMonths < 12) return `${diffMonths} ماه پیش`
+      return `${diffYears} سال پیش`
+    } catch {
+      return 'چندی پیش'
+    }
+  }
+
 </script>
 
 <div class="wave-card">
@@ -449,16 +433,19 @@
   <!-- Wave Info -->
   <div class="wave-info">
     <div class="wave-header">
-      <div class="wave-title-section">
-        <h3 class="wave-title" onclick={goToWaveDetail}>{wave.title}</h3>
-        <div class="">
-          <span class="wave-category">{wave.category}</span>
-          <span class="wave-category">3k likes</span>
-          <span class="wave-category">90k views</span>
-          <span class="wave-category">3mo ago</span>
-          <span class="wave-category">#Emotional</span>
-        </div>
-      </div>
+     <div class="wave-title-section">
+    <h3 class="wave-title" onclick={goToWaveDetail}>{wave.title}</h3>
+    <div class="wave-meta-tags">
+      <span class="wave-category">{wave.category}</span>
+      <span class="wave-category ">{formatNumber(wave.likes_count || 0)} reactions</span>
+      <span class="wave-category ">{formatNumber(wave.comments_count || 0)} comments</span>
+      <span class="wave-category">{formatNumber(wave.views_count || 0)} views</span>
+      <span class="wave-category">{formatTimeAgo(wave.created_at)}</span>
+      {#if wave.hashtags}
+        <span class="wave-category">#{wave.hashtags || '#'}</span>
+      {/if}
+    </div>
+  </div>
       
       <div class="wave-actions-top">
         <div class="wave-actions">
@@ -555,7 +542,7 @@
     999
   </span>
   <span>
-    <Frown size={16} />
+    
     10
   </span>
   <span>
