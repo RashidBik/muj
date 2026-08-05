@@ -3,11 +3,12 @@ import { supabase } from '$lib/client/supabase'
 export interface Notification {
   id: string
   user_id: string
-  type: 'LIKE' | 'COMMENT' | 'FOLLOW' | 'ROOM_MESSAGE'
+  type: 'LIKE' | 'COMMENT' | 'FOLLOW' | 'ROOM_JOIN' | 'ROOM_MESSAGE' | 'NEW_WAVE' | 'TOKEN_EARNED'
   message: string
   actor_id: string
   wave_id: string | null
   comment_id: string | null
+  room_id: string | null
   is_read: boolean
   created_at: string
   actor?: {
@@ -19,6 +20,10 @@ export interface Notification {
   wave?: {
     id: string
     title: string
+  }
+  room?: {
+    id: string
+    name: string
   }
 }
 
@@ -41,6 +46,10 @@ export async function getNotifications(
         wave:waves(
           id,
           title
+        ),
+        room:rooms(
+          id,
+          name
         )
       `)
       .eq('user_id', userId)
@@ -105,16 +114,20 @@ export async function markAllAsRead(userId: string): Promise<boolean> {
   }
 }
 
-// Create notification (called from server/API)
+// Create notification with room support
 export async function createNotification(
   userId: string,
   type: string,
   message: string,
   actorId: string,
   waveId?: string,
-  commentId?: string
+  commentId?: string,
+  roomId?: string
 ): Promise<boolean> {
   try {
+    // Don't notify yourself
+    if (userId === actorId) return true
+
     const { error } = await supabase
       .from('notifications')
       .insert({
@@ -123,13 +136,33 @@ export async function createNotification(
         message: message,
         actor_id: actorId,
         wave_id: waveId || null,
-        comment_id: commentId || null
+        comment_id: commentId || null,
+        room_id: roomId || null
       })
 
     if (error) throw error
+
+    // Update unread count in real-time
+    const unreadCount = await getUnreadCount(userId)
+    window.dispatchEvent(new CustomEvent('notification-count', { 
+      detail: unreadCount 
+    }))
+
     return true
   } catch (error) {
     console.error('Error creating notification:', error)
     return false
+  }
+}
+
+// Helper to update notification count
+export async function updateNotificationCount(userId: string) {
+  try {
+    const count = await getUnreadCount(userId)
+    window.dispatchEvent(new CustomEvent('notification-count', { 
+      detail: count 
+    }))
+  } catch (error) {
+    console.error('Error updating notification count:', error)
   }
 }

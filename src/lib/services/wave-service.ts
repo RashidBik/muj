@@ -1,4 +1,6 @@
 import { supabase } from '$lib/client/supabase'
+import { createNotification, updateNotificationCount } from './notification-service'
+import { addTokens, TokenRewards } from './token-service'
 import type { User } from '$lib/stores/user'
 
 export interface Wave {
@@ -42,6 +44,8 @@ export const REACTION_EMOJIS = ['❤️', '🎉', '😂', '😮', '😢', '😡'
 
 export async function loadWaves(userId?: string): Promise<WaveWithLike[]> {
   try {
+    const now = new Date().toISOString()
+    
     const { data, error } = await supabase
       .from('waves')
       .select(`
@@ -54,6 +58,7 @@ export async function loadWaves(userId?: string): Promise<WaveWithLike[]> {
         )
       `)
       .eq('status', 'PUBLISHED')
+      .or(`expires_at.is.null,expires_at.gt.${now}`) // ✅ فقط موج‌های معتبر
       .order('created_at', { ascending: false })
       .limit(20)
 
@@ -111,6 +116,87 @@ export async function loadWaves(userId?: string): Promise<WaveWithLike[]> {
     }))
   } catch (error) {
     console.error('خطا در بارگذاری موج‌ها:', error)
+    throw error
+  }
+}
+
+// ✅ Create new wave with notifications and token rewards
+export async function createWave(
+  authorId: string,
+  title: string,
+  audioUrl: string,
+  description?: string
+): Promise<any> {
+  try {
+    const { data, error } = await supabase
+      .from('waves')
+      .insert({
+        author_id: authorId,
+        title: title,
+        audio_url: audioUrl,
+        description: description || null,
+        status: 'PUBLISHED'
+      })
+      .select(`
+        *,
+        author:users(
+          id,
+          name,
+          username,
+          avatar
+        )
+      `)
+      .single()
+
+    if (error) throw error
+
+    // ✅ Award tokens for publishing wave
+    try {
+      await addTokens(
+        authorId,
+        TokenRewards.PUBLISH_WAVE,
+        'PUBLISH_WAVE',
+        `انتشار موج "${title}"`,
+        data.id
+      )
+    } catch (tokenError) {
+      console.error('Error awarding tokens:', tokenError)
+    }
+
+    // ✅ NOTIFY FOLLOWERS ABOUT NEW POST
+    try {
+      // Get all followers of the author
+      const { data: followers } = await supabase
+        .from('follows')
+        .select('follower_id')
+        .eq('following_id', authorId)
+
+      const { data: actor } = await supabase
+        .from('users')
+        .select('name')
+        .eq('id', authorId)
+        .single()
+
+      if (followers && followers.length > 0) {
+        const actorName = actor?.name || 'کاربر'
+        // Send notification to each follower
+        for (const follower of followers) {
+          await createNotification(
+            follower.follower_id,
+            'NEW_WAVE',
+            `${actorName} یک موج جدید منتشر کرد: "${title}"`,
+            authorId,
+            data.id
+          )
+        }
+      }
+    } catch (notifError) {
+      console.error('Error creating new wave notification:', notifError)
+    }
+
+    return data
+  } catch (error) {
+    console.error('Error creating wave:', error)
     throw error
   }
 }
@@ -217,7 +303,7 @@ export async function getUserReaction(waveId: string, userId: string): Promise<s
   }
 }
 
-// ✅ تابع toggleLike قبلی
+// ✅ تابع toggleLike با notification و token
 export async function toggleLike(waveId: string, userId: string, isLiked: boolean): Promise<boolean> {
   try {
     if (isLiked) {
@@ -233,11 +319,122 @@ export async function toggleLike(waveId: string, userId: string, isLiked: boolea
         .from('likes')
         .insert({ user_id: userId, wave_id: waveId })
       if (error) throw error
+
+      // ✅ CREATE NOTIFICATION AND TOKEN REWARD FOR WAVE AUTHOR
+      try {
+        // Get wave author
+        const { data: wave } = await supabase
+          .from('waves')
+          .select('author_id, title')
+          .eq('id', waveId)
+          .single()
+
+        if (wave && wave.author_id !== userId) {
+          // Get actor info
+          const { data: actor } = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', userId)
+            .single()
+
+          // Create notification
+          await createNotification(
+            wave.author_id,
+            'LIKE',
+            `${actor?.name || 'کاربر'} به موج "${wave.title}" لایک کرد`,
+            userId,
+            waveId
+          )
+
+          // Award tokens to wave author for receiving like
+          await addTokens(
+            wave.author_id,
+            TokenRewards.LIKE_RECEIVED,
+            'LIKE_RECEIVED',
+            `دریافت لایک برای موج "${wave.title}"`,
+            waveId
+          )
+        }
+      } catch (notifError) {
+        console.error('Error creating like notification/token:', notifError)
+        // Don't fail the like if notification fails
+      }
+
       return true
     }
   } catch (error) {
     console.error('خطا در لایک:', error)
     throw error
+  }
+}
+
+// ✅ تابع حذف موج
+export async function deleteWave(waveId: string, userId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    // بررسی اینکه کاربر صاحب موج است
+    const { data: wave, error: fetchError } = await supabase
+      .from('waves')
+      .select('author_id, audio_url, cover_image')
+      .eq('id', waveId)
+      .single()
+
+    if (fetchError) throw fetchError
+    if (wave.author_id !== userId) {
+      return { success: false, message: 'شما اجازه حذف این موج را ندارید' }
+    }
+
+    // حذف فایل صوتی از Storage
+    if (wave.audio_url) {
+      const audioPath = wave.audio_url.split('/').pop()
+      if (audioPath) {
+        await supabase.storage.from('waves').remove([audioPath])
+      }
+    }
+
+    // حذف تصویر کاور از Storage
+    if (wave.cover_image) {
+      const coverPath = wave.cover_image.split('/').pop()
+      if (coverPath) {
+        await supabase.storage.from('covers').remove([coverPath])
+      }
+    }
+
+    // حذف ریکشن‌های مرتبط
+    await supabase
+      .from('reactions')
+      .delete()
+      .eq('wave_id', waveId)
+
+    // حذف کامنت‌های مرتبط
+    await supabase
+      .from('comments')
+      .delete()
+      .eq('wave_id', waveId)
+
+    // حذف لایک‌های مرتبط
+    await supabase
+      .from('likes')
+      .delete()
+      .eq('wave_id', waveId)
+
+    // حذف پیام‌های اتاق مرتبط
+    await supabase
+      .from('room_messages')
+      .delete()
+      .eq('wave_id', waveId)
+
+    // حذف خود موج
+    const { error: deleteError } = await supabase
+      .from('waves')
+      .delete()
+      .eq('id', waveId)
+
+    if (deleteError) throw deleteError
+
+    return { success: true, message: 'موج با موفقیت حذف شد' }
+  } catch (error) {
+    console.error('خطا در حذف موج:', error)
+    return { success: false, message: 'خطا در حذف موج. لطفاً دوباره تلاش کنید.' }
   }
 }
 

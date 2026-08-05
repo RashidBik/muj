@@ -48,24 +48,26 @@
   }
 
   // Handle notification click
-  async function handleNotificationClick(notification: Notification) {
-    // Mark as read
-    if (!notification.is_read) {
-      await markAsRead(notification.id)
-      notification.is_read = true
-      notifications = [...notifications]
-    }
+ async function handleNotificationClick(notification: Notification) {
+  // Mark as read
+  if (!notification.is_read) {
+    await markAsRead(notification.id)
+    notification.is_read = true
+    notifications = [...notifications]
+  }
 
-    // Navigate based on type
-    if (notification.wave_id) {
-      goto(`/wave/${notification.wave_id}`)
-    } else if (notification.type === 'FOLLOW') {
-      const actor = notification.actor
-      if (actor?.username) {
-        goto(`/profile/${actor.username}`)
-      }
+  // Navigate based on type
+  if (notification.room_id) {
+    goto(`/room/${notification.room_id}`)
+  } else if (notification.wave_id) {
+    goto(`/wave/${notification.wave_id}`)
+  } else if (notification.type === 'FOLLOW') {
+    const actor = notification.actor
+    if (actor?.username) {
+      goto(`/profile/${actor.username}`)
     }
   }
+}
 
   // Mark all as read
   async function handleMarkAllRead() {
@@ -93,15 +95,18 @@
   }
 
   // Get notification icon
-  function getNotificationIcon(type: string): string {
-    const icons: Record<string, string> = {
-      'LIKE': '❤️',
-      'COMMENT': '💬',
-      'FOLLOW': '👤',
-      'ROOM_MESSAGE': '🏠'
-    }
-    return icons[type] || '🔔'
+ function getNotificationIcon(type: string): string {
+  const icons: Record<string, string> = {
+    'LIKE': '❤️',
+    'COMMENT': '💬',
+    'FOLLOW': '👤',
+    'ROOM_JOIN': '🚪',
+    'ROOM_MESSAGE': '🏠',
+    'NEW_WAVE': '🌊',
+    'TOKEN_EARNED': '💰'
   }
+  return icons[type] || '🔔'
+}
 
   // Setup realtime subscription
   let subscription: any = null

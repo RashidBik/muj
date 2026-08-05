@@ -172,9 +172,26 @@
         duration = 60
       }
 
+      // ✅ اصلاح: دسته‌بندی بر اساس ۳۰ ثانیه برای استوری‌ها
       let durationCategory = 'MEDIUM'
-      if (duration < 60) durationCategory = 'SHORT'
-      else if (duration > 240) durationCategory = 'LONG'
+      let expiresAt = null
+      const now = new Date()
+
+      // استوری‌ها: زیر ۳۰ ثانیه → ۲۴ ساعت
+      if (duration < 30) {
+        durationCategory = 'SHORT'
+        expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+      } 
+      // موج‌های معمولی: ۳۰ ثانیه تا ۴ دقیقه → ۳۰ روز
+      else if (duration < 240) {
+        durationCategory = 'MEDIUM'
+        expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      } 
+      // موج‌های طولانی: بالای ۴ دقیقه → ۳۰ روز
+      else {
+        durationCategory = 'LONG'
+        expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      }
 
       const { data: waveData, error: waveError } = await supabase
         .from('waves')
@@ -185,7 +202,8 @@
           duration: duration,
           duration_category: durationCategory,
           category: category,
-          author_id: currentUser.id
+          author_id: currentUser.id,
+          expires_at: expiresAt
         })
         .select()
         .single()
@@ -202,7 +220,12 @@
         }
       })
 
-      goto(`/wave/${waveData.id}`)
+      // هدایت به صفحه مناسب بر اساس مدت زمان
+      if (durationCategory === 'SHORT') {
+        goto(`/`)
+      } else {
+        goto(`/`)
+      }
 
     } catch (error) {
       console.error('خطا در انتشار موج:', error)
@@ -223,6 +246,7 @@
   })
 </script>
 
+<!-- بقیه کد HTML و CSS به همین شکل می‌ماند -->
 <div class="create-wave-page">
   <div class="container">
     <!-- هدر با آیکون -->

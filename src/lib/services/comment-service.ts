@@ -1,6 +1,5 @@
 import { supabase } from '$lib/client/supabase'
-import { user } from '$lib/stores/user'
-import { get } from 'svelte/store'
+import { createNotification } from './notification-service'
 
 export interface Comment {
   id: string
@@ -119,7 +118,7 @@ export async function getCommentCount(waveId: string): Promise<number> {
 }
 
 /**
- * Add a new comment
+ * Add a new comment with notification
  */
 export async function addComment(
   waveId: string,
@@ -164,6 +163,63 @@ export async function addComment(
     // Update wave's comments count
     await supabase.rpc('increment_wave_comments', { wave_id: waveId })
 
+    // ✅ CREATE NOTIFICATIONS
+    try {
+      // Get wave details
+      const { data: wave } = await supabase
+        .from('waves')
+        .select('author_id, title')
+        .eq('id', waveId)
+        .single()
+
+      // Get comment author details
+      const { data: actor } = await supabase
+        .from('users')
+        .select('name')
+        .eq('id', authorId)
+        .single()
+
+      const actorName = actor?.name || 'کاربر'
+      const shortContent = trimmedContent.length > 50 
+        ? trimmedContent.substring(0, 50) + '...' 
+        : trimmedContent
+
+      // Notification for wave author
+      if (wave && wave.author_id !== authorId) {
+        await createNotification(
+          wave.author_id,
+          'COMMENT',
+          `${actorName} به موج "${wave.title}" نظر داد: "${shortContent}"`,
+          authorId,
+          waveId,
+          data.id
+        )
+      }
+
+      // If replying to a comment, notify the parent comment author
+      if (parentId) {
+        const { data: parentComment } = await supabase
+          .from('comments')
+          .select('author_id')
+          .eq('id', parentId)
+          .single()
+
+        if (parentComment && parentComment.author_id !== authorId) {
+          await createNotification(
+            parentComment.author_id,
+            'COMMENT',
+            `${actorName} به نظر شما در موج "${wave?.title || ''}" پاسخ داد`,
+            authorId,
+            waveId,
+            data.id
+          )
+        }
+      }
+    } catch (notifError) {
+      console.error('Error creating comment notification:', notifError)
+      // Don't fail the comment if notification fails
+    }
+
     return data
   } catch (error) {
     console.error('Error adding comment:', error)
@@ -207,7 +263,7 @@ export async function deleteComment(commentId: string, userId: string): Promise<
 }
 
 /**
- * Toggle like on a comment
+ * Toggle like on a comment with notification
  */
 export async function toggleCommentLike(commentId: string, userId: string): Promise<boolean> {
   try {
@@ -244,6 +300,39 @@ export async function toggleCommentLike(commentId: string, userId: string): Prom
       if (insertError) throw insertError
 
       await supabase.rpc('increment_comment_likes', { comment_id: commentId })
+
+      // ✅ CREATE NOTIFICATION FOR COMMENT AUTHOR
+      try {
+        const { data: comment } = await supabase
+          .from('comments')
+          .select(`
+            author_id,
+            wave_id,
+            waves:wave_id (title)
+          `)
+          .eq('id', commentId)
+          .single()
+
+        if (comment && comment.author_id !== userId) {
+          const { data: actor } = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', userId)
+            .single()
+
+          await createNotification(
+            comment.author_id,
+            'LIKE',
+            `${actor?.name || 'کاربر'} به نظر شما در موج "${comment.waves?.title || ''}" لایک کرد`,
+            userId,
+            comment.wave_id,
+            commentId
+          )
+        }
+      } catch (notifError) {
+        console.error('Error creating comment like notification:', notifError)
+      }
+
       return true
     }
   } catch (error) {

@@ -10,6 +10,7 @@
   import AudioPlayer from './AudioPlayer.svelte'
   import { toggleReaction, getWaveReactions, getUserReaction } from '$lib/services/wave-service'
   import ReactionPicker from '$lib/components/ui/ReactionPicker.svelte'
+  import { followUser, unfollowUser } from '$lib/services/profile-service'
 
   // Icon imports
   import {
@@ -28,13 +29,15 @@
     AlertCircle,
     X,
     Send,
-    ChevronLeft
+    ChevronLeft,
+    Download
   } from 'lucide-svelte'
 
   let { 
     wave,
     currentUserId,
-    onLike
+    onLike,
+    showDelete = false 
   }: {
     wave: WaveWithLike
     currentUserId: string | null
@@ -49,8 +52,8 @@
   let boostSuccess = $state(false)
   let isPlaying = $state(false)
   let isFollowing = $state(false)
+  let isTogglingFollow = $state(false)
 
-  // ✅ مستقیماً از wave می‌خوانیم
   let waveReactions = $derived(wave.reactions || [])
   let userReaction = $derived(wave.userReaction || null)
 
@@ -82,12 +85,86 @@
     return () => unsubscribe()
   })
 
+  async function loadFollowStatus() {
+    if (!currentUserId || !wave.author_id) return
+    
+    try {
+      const { data } = await supabase
+        .from('follows')
+        .select('*')
+        .eq('follower_id', currentUserId)
+        .eq('following_id', wave.author_id)
+        .maybeSingle()
+      
+      isFollowing = !!data
+    } catch (err) {
+      console.error('Error loading follow status:', err)
+    }
+  }
+
+  async function toggleFollow() {
+    if (!currentUser) {
+      goto('/auth/login')
+      return
+    }
+
+    if (isTogglingFollow) return
+    isTogglingFollow = true
+
+    try {
+      if (isFollowing) {
+        const result = await unfollowUser(currentUser.id, wave.author_id)
+        if (result) {
+          isFollowing = false
+        }
+      } else {
+        const result = await followUser(currentUser.id, wave.author_id)
+        if (result) {
+          isFollowing = true
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling follow:', error)
+      alert('خطا در عملیات. لطفاً دوباره تلاش کنید.')
+    } finally {
+      isTogglingFollow = false
+    }
+  }
+
+  // ✅ دانلود فایل صوتی
+  async function downloadAudio() {
+    if (!wave.audio_url) {
+      alert('فایل صوتی موجود نیست')
+      return
+    }
+
+    try {
+      // دریافت فایل از URL
+      const response = await fetch(wave.audio_url)
+      const blob = await response.blob()
+      
+      // ایجاد لینک دانلود
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${wave.title || 'wave'}.mp3`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Error downloading audio:', error)
+      alert('خطا در دانلود فایل. لطفاً دوباره تلاش کنید.')
+    }
+  }
+
   // Load user balance
   onMount(async () => {
     if (currentUserId) {
       userBalance = await getTokenBalance(currentUserId)
     }
     await loadComments()
+    await loadFollowStatus()
   })
 
   // Load real comments from database
@@ -129,7 +206,6 @@
     }
   }
 
-  // ✅ تابع مدیریت ریکشن (با به‌روزرسانی wave)
   async function handleReaction(emoji: string) {
     if (!currentUser) {
       goto('/auth/login')
@@ -143,7 +219,6 @@
       const result = await toggleReaction(wave.id, currentUser.id, emoji)
       
       if (result.success) {
-        // ✅ به‌روزرسانی مستقیم wave
         if (result.action === 'removed') {
           wave.userReaction = null
           const idx = wave.reactions.findIndex(r => r.emoji === emoji)
@@ -183,7 +258,6 @@
           }
         }
         
-        // ✅ Trigger reactivity
         wave = { ...wave }
       }
     } catch (err) {
@@ -317,8 +391,9 @@
     goto(`/wave/${wave.id}`)
   }
 
-  function toggleFollow() {
-    isFollowing = !isFollowing
+  function emitDelete() {
+    const event = new CustomEvent('delete', { detail: { waveId: wave.id } })
+    window.dispatchEvent(event)
   }
 
   function togglePlay() {
@@ -392,7 +467,30 @@
     }
   }
 
-   // ✅ فرمت زمان به صورت "مدت زمان پیش"
+  // ✅ نمایش زمان باقی‌مانده برای موج با نمایش روز
+  function getTimeRemaining(expiresAt: string | null): string {
+    if (!expiresAt) return 'نامحدود'
+    
+    const now = new Date()
+    const expire = new Date(expiresAt)
+    const diff = expire.getTime() - now.getTime()
+    
+    if (diff <= 0) return 'منقضی شده'
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24))
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60))
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    
+    if (days > 0) {
+      return `${days} days ${hours} hours`
+    }
+    if (hours > 0) {
+      return `${hours} hours ${minutes} minutes`
+    }
+    return `${minutes} minutes`
+  }
+
+  // ✅ فرمت زمان به صورت "مدت زمان پیش" (برای نظرات و موارد دیگر)
   function formatTimeAgo(date: string): string {
     try {
       const now = new Date()
@@ -415,7 +513,6 @@
       return 'چندی پیش'
     }
   }
-
 </script>
 
 <div class="wave-card">
@@ -440,7 +537,12 @@
       <span class="wave-category ">{formatNumber(wave.likes_count || 0)} reactions</span>
       <span class="wave-category ">{formatNumber(wave.comments_count || 0)} comments</span>
       <span class="wave-category">{formatNumber(wave.views_count || 0)} views</span>
-      <span class="wave-category">{formatTimeAgo(wave.created_at)}</span>
+      <!-- ✅ نمایش زمان باقی‌مانده برای موج -->
+      {#if wave.expires_at}
+        <span class="wave-category expires-badge">
+          ⏱️ {getTimeRemaining(wave.expires_at)}
+        </span>
+      {/if}
       {#if wave.hashtags}
         <span class="wave-category">#{wave.hashtags || '#'}</span>
       {/if}
@@ -448,6 +550,12 @@
   </div>
       
       <div class="wave-actions-top">
+          {#if showDelete}
+            <button class="action-btn delete-btn" onclick={() => emitDelete()}>
+              <Trash2 size={16} />
+              حذف
+            </button>
+          {/if}
         <div class="wave-actions">
           <button class="action-btn comment-btn" onclick={toggleCommentInput}>
             <MessageCircle size={16} />
@@ -463,6 +571,10 @@
           <button class="action-btn room-btn" onclick={() => goto(`/room/${wave.id}`)}>
             <Users size={16} />
             اتاق
+          </button>
+          <!-- ✅ دکمه دانلود -->
+          <button class="action-btn download-btn" onclick={downloadAudio} title="دانلود فایل صوتی">
+            <Download size={16} />
           </button>
         </div>
       </div>
@@ -499,29 +611,28 @@
       <div class="wave-author">
         <Avatar src={wave.author?.avatar} size="sm" />
         <span class="author-name" onclick={() => goToProfile(wave.author?.username)}>{wave.author?.name || 'ناشناس'}</span>
-        <button class="follow-btn {isFollowing ? 'following' : ''}" onclick={(e) => {
-          e.stopPropagation()
-          toggleFollow()
-        }}>
-          {#if isFollowing}
-            <UserCheck size={14} />
-          {:else}
-            <UserPlus size={14} />
-          {/if}
-        </button>
+        <!-- ✅ دکمه فالو فقط در صورتی نمایش داده شود که کاربر خودش نباشد -->
+        {#if currentUser && currentUser.id !== wave.author_id}
+          <button class="follow-btn {isFollowing ? 'following' : ''}" onclick={(e) => {
+            e.stopPropagation()
+            toggleFollow()
+          }}>
+            {#if isFollowing}
+              <UserCheck size={14} />
+            {:else}
+              <UserPlus size={14} />
+            {/if}
+          </button>
+        {/if}
       </div>
       
-<!-- جایگزین دکمه لایک با ریکشن پیکر -->
 <div class="wave-stats">
-  <!-- ✅ ریکشن پیکر -->
   <div class="reaction-section">
-      <!-- ✅ Reaction Picker (فقط یک ریکشن) -->
   <ReactionPicker
     currentReaction={userReaction}
     onSelect={(emoji) => handleReaction(emoji)}
   />
   
-  <!-- ✅ نمایش ریکشن‌های جمعی (مرتب‌شده) -->
   {#if waveReactions.length > 0}
     <div class="reaction-summary">
       {#each waveReactions as reaction (reaction.emoji)}
@@ -535,20 +646,6 @@
     </div>
   {/if}
   </div>
-  
-  <!-- سایر آمار -->
-  <!-- <span>
-    <Smile size={16} />
-    999
-  </span>
-  <span>
-    
-    10
-  </span>
-  <span>
-    <Flame size={16} color="#f59e0b" />
-    1
-  </span> -->
 </div>
     </div>
 
@@ -736,7 +833,25 @@
     transition: transform 0.2s, box-shadow 0.2s;
     position: relative;
   }
+ .delete-btn {
+    background: #fee2e2;
+    color: #ef4444;
+  }
 
+  .delete-btn:hover {
+    background: #fecaca;
+  }
+
+  /* ✅ دکمه دانلود */
+  .download-btn {
+    background: #e0e7ff;
+    color: #4f46e5;
+  }
+
+  .download-btn:hover {
+    background: #c7d2fe;
+  }
+  
   .wave-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 20px rgba(0,0,0,0.12);
@@ -799,6 +914,13 @@
     border-radius: 12px;
     display: inline-block;
     margin-top: 2px;
+  }
+
+  /* ✅ استایل ویژه برای تایمر باقی‌مانده */
+  .expires-badge {
+    background: #fef3c7 !important;
+    color: #92400e !important;
+    font-weight: 600;
   }
 
   .wave-actions-top {
