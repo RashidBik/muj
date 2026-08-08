@@ -35,6 +35,36 @@ export function getCategoryLabel(category: string): string {
   return labels[category] || category
 }
 
+// ✅ Format view count
+export function formatViewCount(views: number): string {
+  if (!views || views === 0) return '0'
+  if (views >= 1000000) {
+    return (views / 1000000).toFixed(1) + 'M'
+  }
+  if (views >= 1000) {
+    return (views / 1000).toFixed(1) + 'K'
+  }
+  return views.toString()
+}
+
+// ✅ Parse hashtags from text
+export function parseHashtags(text: string): string[] {
+  const hashtagRegex = /#[\w\u0600-\u06FF]+/g
+  const matches = text.match(hashtagRegex)
+  return matches ? matches.map(tag => tag.substring(1)) : []
+}
+
+// ✅ Format hashtags for display
+export function formatHashtags(hashtags: string | null): string[] {
+  if (!hashtags) return []
+  return hashtags.split(' ').filter(tag => tag.trim())
+}
+
+// ✅ Create hashtag string from array
+export function hashtagsToString(tags: string[]): string {
+  return tags.filter(tag => tag.trim()).join(' ')
+}
+
 /**
  * Check if a wave is a short wave (under 30 seconds)
  */
@@ -58,4 +88,21 @@ export function getWaveRoute(waveId: string, duration: number): string {
 export function navigateToWave(goto: (url: string) => void, waveId: string, duration: number): void {
   const route = getWaveRoute(waveId, duration)
   goto(route)
+}
+
+// Add this function to wave-helpers.ts
+export function formatNumber(num: number): string {
+  if (num === undefined || num === null) return '0'
+  if (num >= 1000000) {
+    return (num / 1000000).toFixed(1) + 'M'
+  }
+  if (num >= 1000) {
+    return (num / 1000).toFixed(1) + 'K'
+  }
+  return num.toString()
+}
+
+// Also add this for Persian formatting if needed
+export function formatNumberPersian(num: number): string {
+  return num.toLocaleString('fa-IR')
 }

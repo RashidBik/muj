@@ -64,6 +64,8 @@
     CalendarDays,
     AlertCircle
   } from 'lucide-svelte'
+	import AdReward from '$lib/components/token/AdReward.svelte';
+	import TaskList from '$lib/components/token/TaskList.svelte';
 
   let profile = $state<Profile | null>(null)
   let waves = $state<any[]>([])
@@ -440,7 +442,8 @@
     </div>
 
     <DailyReward />
-
+    <AdReward />
+    <TaskList />
     <!-- Tabs -->
     {#if isOwnProfile}
       <div class="profile-tabs">

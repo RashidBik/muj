@@ -1,5 +1,5 @@
 import { supabase } from '$lib/client/supabase'
-import { browser } from '$app/environment'
+import { trackEvent } from './analytics-service'
 
 export interface UserStats {
   total_waves: number
@@ -9,10 +9,9 @@ export interface UserStats {
   total_following: number
   total_referrals: number
   total_tokens: number
-  waves_played: number
   engagement_score: number
   streak_days: number
-  last_active: string | null
+  waves_played: number
 }
 
 export interface UserActivity {
@@ -23,7 +22,7 @@ export interface UserActivity {
   plays: number
 }
 
-export interface UserAchievement {
+export interface Achievement {
   id: string
   name: string
   description: string
@@ -42,76 +41,75 @@ export async function getUserStats(userId: string): Promise<UserStats> {
       .eq('author_id', userId)
       .eq('status', 'PUBLISHED')
 
-    // Get likes received
-    const { count: likesCount } = await supabase
-      .from('likes')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
+    // ✅ Get likes count - likes RECEIVED by the user (on their waves)
+    // First get all waves by this user
+    const { data: userWaves } = await supabase
+      .from('waves')
+      .select('id')
+      .eq('author_id', userId)
+      .eq('status', 'PUBLISHED')
 
-    // Get comments count
+    let likesCount = 0
+    if (userWaves && userWaves.length > 0) {
+      const waveIds = userWaves.map(w => w.id)
+      const { count } = await supabase
+        .from('likes')
+        .select('*', { count: 'exact', head: true })
+        .in('wave_id', waveIds)
+      likesCount = count || 0
+    }
+
+    // Get comments count - comments made BY the user
     const { count: commentsCount } = await supabase
       .from('comments')
       .select('*', { count: 'exact', head: true })
       .eq('author_id', userId)
 
-    // Get followers
+    // Get followers count
     const { count: followersCount } = await supabase
       .from('follows')
       .select('*', { count: 'exact', head: true })
       .eq('following_id', userId)
 
-    // Get following
+    // Get following count
     const { count: followingCount } = await supabase
       .from('follows')
       .select('*', { count: 'exact', head: true })
       .eq('follower_id', userId)
 
-    // Get referrals
+    // Get referrals count
     const { count: referralsCount } = await supabase
       .from('referrals')
       .select('*', { count: 'exact', head: true })
       .eq('referrer_id', userId)
 
-    // Get tokens
-    const { data: tokens } = await supabase
+    // Get token balance
+    const { data: tokenData } = await supabase
       .from('user_tokens')
       .select('balance')
       .eq('user_id', userId)
-      .maybeSingle()
+      .single()
 
-    // Get user events for engagement score
-    const { data: events } = await supabase
-      .from('user_events')
-      .select('event_type')
+    // Get engagement score from user_engagement
+    const { data: engagementData } = await supabase
+      .from('user_engagement')
+      .select('score')
       .eq('user_id', userId)
+      .single()
 
-    // Calculate engagement score
-    const scores: Record<string, number> = {
-      'wave_publish': 10,
-      'comment': 5,
-      'like': 2,
-      'share': 8,
-      'wave_view': 1,
-      'wave_play': 1,
-      'follow': 3,
-      'referral': 15,
-      'boost_wave': 5,
-      'room_message': 1
-    }
-
-    let engagementScore = 0
-    let wavesPlayed = 0
-    events?.forEach(event => {
-      engagementScore += scores[event.event_type] || 0
-      if (event.event_type === 'wave_play') wavesPlayed++
-    })
-
-    // Get streak days from user_scores
-    const { data: userScore } = await supabase
-      .from('user_scores')
-      .select('streak_days, last_active_at')
+    // Get streak days
+    const { data: streakData } = await supabase
+      .from('user_streaks')
+      .select('days')
       .eq('user_id', userId)
-      .maybeSingle()
+      .single()
+
+    // Get waves played
+    const { data: playedData } = await supabase
+      .from('user_plays')
+      .select('count')
+      .eq('user_id', userId)
+      .single()
 
     return {
       total_waves: wavesCount || 0,
@@ -120,11 +118,10 @@ export async function getUserStats(userId: string): Promise<UserStats> {
       total_followers: followersCount || 0,
       total_following: followingCount || 0,
       total_referrals: referralsCount || 0,
-      total_tokens: tokens?.balance || 0,
-      waves_played: wavesPlayed,
-      engagement_score: engagementScore,
-      streak_days: userScore?.streak_days || 0,
-      last_active: userScore?.last_active_at || null
+      total_tokens: tokenData?.balance || 0,
+      engagement_score: engagementData?.score || 0,
+      streak_days: streakData?.days || 0,
+      waves_played: playedData?.count || 0
     }
   } catch (error) {
     console.error('Error getting user stats:', error)
@@ -136,34 +133,36 @@ export async function getUserStats(userId: string): Promise<UserStats> {
       total_following: 0,
       total_referrals: 0,
       total_tokens: 0,
-      waves_played: 0,
       engagement_score: 0,
       streak_days: 0,
-      last_active: null
+      waves_played: 0
     }
   }
 }
 
-// Get user activity (last 7 days)
-export async function getUserActivity(userId: string): Promise<UserActivity[]> {
+// Get user activity (daily)
+export async function getUserActivity(
+  userId: string,
+  days: number = 7
+): Promise<UserActivity[]> {
   try {
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-
-    const { data: events } = await supabase
-      .from('user_events')
-      .select('event_type, created_at')
+    const { data, error } = await supabase
+      .from('user_activity_daily')
+      .select('*')
       .eq('user_id', userId)
-      .gte('created_at', sevenDaysAgo.toISOString())
+      .order('date', { ascending: true })
+      .limit(days)
 
-    // Group by date
-    const activityMap: Record<string, UserActivity> = {}
-    
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date()
+    if (error) throw error
+
+    // Fill in missing days
+    const result: Record<string, UserActivity> = {}
+    const now = new Date()
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(now)
       date.setDate(date.getDate() - i)
       const dateStr = date.toISOString().split('T')[0]
-      activityMap[dateStr] = {
+      result[dateStr] = {
         date: dateStr,
         waves: 0,
         likes: 0,
@@ -172,28 +171,19 @@ export async function getUserActivity(userId: string): Promise<UserActivity[]> {
       }
     }
 
-    events?.forEach(event => {
-      const dateStr = event.created_at.split('T')[0]
-      if (activityMap[dateStr]) {
-        switch (event.event_type) {
-          case 'wave_publish':
-            activityMap[dateStr].waves++
-            break
-          case 'like':
-          case 'unlike':
-            activityMap[dateStr].likes++
-            break
-          case 'comment':
-            activityMap[dateStr].comments++
-            break
-          case 'wave_play':
-            activityMap[dateStr].plays++
-            break
+    data?.forEach((day: any) => {
+      if (result[day.date]) {
+        result[day.date] = {
+          date: day.date,
+          waves: day.waves || 0,
+          likes: day.likes || 0,
+          comments: day.comments || 0,
+          plays: day.plays || 0
         }
       }
     })
 
-    return Object.values(activityMap)
+    return Object.values(result)
   } catch (error) {
     console.error('Error getting user activity:', error)
     return []
@@ -201,86 +191,32 @@ export async function getUserActivity(userId: string): Promise<UserActivity[]> {
 }
 
 // Get user achievements
-export async function getUserAchievements(userId: string): Promise<UserAchievement[]> {
+export async function getUserAchievements(userId: string): Promise<Achievement[]> {
   try {
-    const stats = await getUserStats(userId)
-    
-    const achievements: UserAchievement[] = [
-      {
-        id: 'first_wave',
-        name: 'اولین موج',
-        description: 'اولین موج خود را منتشر کردید',
-        icon: '🎙️',
-        unlocked: stats.total_waves >= 1,
-        unlocked_at: null
-      },
-      {
-        id: 'wave_master',
-        name: 'استاد موج',
-        description: '۵۰ موج منتشر کردید',
-        icon: '🏆',
-        unlocked: stats.total_waves >= 50,
-        unlocked_at: null
-      },
-      {
-        id: 'popular',
-        name: 'محبوب',
-        description: '۱۰۰ لایک دریافت کردید',
-        icon: '❤️',
-        unlocked: stats.total_likes >= 100,
-        unlocked_at: null
-      },
-      {
-        id: 'commentator',
-        name: 'نظر دهنده',
-        description: '۵۰ نظر دادید',
-        icon: '💬',
-        unlocked: stats.total_comments >= 50,
-        unlocked_at: null
-      },
-      {
-        id: 'influencer',
-        name: 'تاثیرگذار',
-        description: '۵۰ دنبال‌کننده دارید',
-        icon: '👥',
-        unlocked: stats.total_followers >= 50,
-        unlocked_at: null
-      },
-      {
-        id: 'referral_star',
-        name: 'ستاره دعوت',
-        description: '۱۰ دوست را دعوت کردید',
-        icon: '⭐',
-        unlocked: stats.total_referrals >= 10,
-        unlocked_at: null
-      },
-      {
-        id: 'token_rich',
-        name: 'توکن دار',
-        description: '۱۰۰۰ توکن جمع کردید',
-        icon: '💰',
-        unlocked: stats.total_tokens >= 1000,
-        unlocked_at: null
-      },
-      {
-        id: 'streak_7',
-        name: 'هفته فعال',
-        description: '۷ روز متوالی فعال بودید',
-        icon: '🔥',
-        unlocked: stats.streak_days >= 7,
-        unlocked_at: null
-      },
-      {
-        id: 'active_listener',
-        name: 'شنونده فعال',
-        description: '۱۰۰ موج را گوش دادید',
-        icon: '🎧',
-        unlocked: stats.waves_played >= 100,
-        unlocked_at: null
-      }
-    ]
+    const { data, error } = await supabase
+      .from('achievements')
+      .select(`
+        id,
+        name,
+        description,
+        icon,
+        user_achievements!left(
+          unlocked,
+          unlocked_at
+        )
+      `)
+      .order('created_at', { ascending: true })
 
-    return achievements
+    if (error) throw error
+
+    return data?.map((a: any) => ({
+      id: a.id,
+      name: a.name,
+      description: a.description,
+      icon: a.icon,
+      unlocked: a.user_achievements?.[0]?.unlocked || false,
+      unlocked_at: a.user_achievements?.[0]?.unlocked_at || null
+    })) || []
   } catch (error) {
     console.error('Error getting user achievements:', error)
     return []
@@ -290,29 +226,75 @@ export async function getUserAchievements(userId: string): Promise<UserAchieveme
 // Get user rank
 export async function getUserRank(userId: string): Promise<number> {
   try {
-    // Get all users with their engagement scores
-    const { data: users } = await supabase
+    const { data, error } = await supabase
       .from('users')
-      .select('id')
+      .select('id, engagement_score')
+      .order('engagement_score', { ascending: false })
 
-    if (!users) return 0
+    if (error) throw error
 
-    // Get scores for all users
-    const scores = await Promise.all(
-      users.map(async (user) => {
-        const stats = await getUserStats(user.id)
-        return { user_id: user.id, score: stats.engagement_score }
-      })
-    )
-
-    // Sort by score descending
-    scores.sort((a, b) => b.score - a.score)
-
-    // Find user's rank
-    const rank = scores.findIndex(u => u.user_id === userId) + 1
+    const rank = data.findIndex((u: any) => u.id === userId) + 1
     return rank || 0
   } catch (error) {
     console.error('Error getting user rank:', error)
     return 0
+  }
+}
+
+// Track user activity
+export async function trackUserActivity(
+  userId: string,
+  activityType: string,
+  details?: Record<string, any>
+): Promise<void> {
+  try {
+    await trackEvent({
+      event_type: activityType as any,
+      event_data: details
+    }, userId)
+  } catch (error) {
+    console.error('Error tracking user activity:', error)
+  }
+}
+
+// Get user engagement metrics
+export async function getUserEngagement(userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('user_events')
+      .select('event_type, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (error) throw error
+
+    const events = data || []
+    const scores: Record<string, number> = {
+      'wave_publish': 10,
+      'comment': 5,
+      'like': 2,
+      'share': 8,
+      'wave_view': 1,
+      'wave_play': 1,
+    }
+
+    let totalScore = 0
+    events.forEach(event => {
+      totalScore += scores[event.event_type] || 1
+    })
+
+    return {
+      total_events: events.length,
+      engagement_score: totalScore,
+      last_active: events[0]?.created_at || null,
+      event_breakdown: events.reduce((acc, e) => {
+        acc[e.event_type] = (acc[e.event_type] || 0) + 1
+        return acc
+      }, {} as Record<string, number>)
+    }
+  } catch (error) {
+    console.error('Error getting user engagement:', error)
+    return null
   }
 }

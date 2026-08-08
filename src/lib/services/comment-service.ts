@@ -1,5 +1,6 @@
 import { supabase } from '$lib/client/supabase'
 import { createNotification } from './notification-service'
+import { trackEvent } from './analytics-service'
 
 export interface Comment {
   id: string
@@ -118,7 +119,7 @@ export async function getCommentCount(waveId: string): Promise<number> {
 }
 
 /**
- * Add a new comment with notification
+ * Add a new comment with notification and analytics
  */
 export async function addComment(
   waveId: string,
@@ -220,6 +221,22 @@ export async function addComment(
       // Don't fail the comment if notification fails
     }
 
+    // ✅ TRACK ANALYTICS EVENT
+    try {
+      await trackEvent({
+        event_type: 'comment',
+        event_data: {
+          wave_id: waveId,
+          comment_id: data.id,
+          parent_id: parentId || null,
+          content_length: trimmedContent.length
+        }
+      }, authorId)
+    } catch (analyticsError) {
+      console.error('Error tracking comment analytics:', analyticsError)
+      // Don't fail the comment if analytics fails
+    }
+
     return data
   } catch (error) {
     console.error('Error adding comment:', error)
@@ -255,6 +272,19 @@ export async function deleteComment(commentId: string, userId: string): Promise<
     // Update wave's comments count
     await supabase.rpc('decrement_wave_comments', { wave_id: comment.wave_id })
 
+    // ✅ TRACK ANALYTICS EVENT
+    try {
+      await trackEvent({
+        event_type: 'comment_delete',
+        event_data: {
+          comment_id: commentId,
+          wave_id: comment.wave_id
+        }
+      }, userId)
+    } catch (analyticsError) {
+      console.error('Error tracking comment delete analytics:', analyticsError)
+    }
+
     return true
   } catch (error) {
     console.error('Error deleting comment:', error)
@@ -263,7 +293,7 @@ export async function deleteComment(commentId: string, userId: string): Promise<
 }
 
 /**
- * Toggle like on a comment with notification
+ * Toggle like on a comment with notification and analytics
  */
 export async function toggleCommentLike(commentId: string, userId: string): Promise<boolean> {
   try {
@@ -287,6 +317,20 @@ export async function toggleCommentLike(commentId: string, userId: string): Prom
       if (deleteError) throw deleteError
 
       await supabase.rpc('decrement_comment_likes', { comment_id: commentId })
+
+      // ✅ TRACK ANALYTICS EVENT - Unlike
+      try {
+        await trackEvent({
+          event_type: 'unlike',
+          event_data: {
+            comment_id: commentId,
+            target_type: 'comment'
+          }
+        }, userId)
+      } catch (analyticsError) {
+        console.error('Error tracking comment unlike analytics:', analyticsError)
+      }
+
       return false
     } else {
       // Like
@@ -331,6 +375,20 @@ export async function toggleCommentLike(commentId: string, userId: string): Prom
         }
       } catch (notifError) {
         console.error('Error creating comment like notification:', notifError)
+      }
+
+      // ✅ TRACK ANALYTICS EVENT - Like
+      try {
+        await trackEvent({
+          event_type: 'like',
+          event_data: {
+            comment_id: commentId,
+            target_type: 'comment',
+            wave_id: comment?.wave_id
+          }
+        }, userId)
+      } catch (analyticsError) {
+        console.error('Error tracking comment like analytics:', analyticsError)
       }
 
       return true

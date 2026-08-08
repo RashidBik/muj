@@ -4,8 +4,9 @@
   import { user } from '$lib/stores/user'
   import { onMount } from 'svelte'
   import { trackEvent } from '$lib/services/analytics-service'
+  import { extractHashtags } from '$lib/services/wave-service'
   
-  // Icon imports (using Lucide icons - lightweight and professional)
+  // Icon imports
   import { 
     ArrowLeft, 
     Mic, 
@@ -21,7 +22,8 @@
     Play,
     StopCircle,
     FolderOpen,
-    Trash2
+    Trash2,
+    Hash
   } from 'lucide-svelte'
 
   // حالت‌های فرم
@@ -35,8 +37,14 @@
   let mediaRecorder: MediaRecorder | null = null
   let audioChunks: Blob[] = []
   let currentUser: any = null
+  
+  // ✅ Hashtag state
+  let hashtags = $state('')
+  let showHashtagInput = $state(false)
+  let audioDuration = $state(0)
+  let isLongWave = $state(false)
 
-  // دسته‌بندی‌ها با آیکون‌های مناسب
+  // دسته‌بندی‌ها
   const categories = [
     { value: 'NEWS', label: 'اخبار', icon: '📰' },
     { value: 'EDUCATION', label: 'آموزش', icon: '📚' },
@@ -72,6 +80,9 @@
         recordingTime = 0
         isRecording = false
         stream.getTracks().forEach(track => track.stop())
+        
+        // ✅ Get duration after recording
+        getAudioDuration(audioFile)
       }
 
       mediaRecorder.start()
@@ -104,6 +115,28 @@
     const input = event.target as HTMLInputElement
     if (input.files && input.files.length > 0) {
       audioFile = input.files[0]
+      getAudioDuration(audioFile)
+    }
+  }
+
+  // ✅ Get audio duration
+  function getAudioDuration(file: File) {
+    try {
+      const audioElement = new Audio()
+      const url = URL.createObjectURL(file)
+      audioElement.src = url
+      audioElement.onloadedmetadata = () => {
+        audioDuration = Math.floor(audioElement.duration)
+        // ✅ Show hashtag input only for waves > 30 seconds
+        isLongWave = audioDuration >= 30
+        showHashtagInput = isLongWave
+        URL.revokeObjectURL(url)
+      }
+    } catch (e) {
+      console.error('Error getting duration:', e)
+      audioDuration = 60
+      isLongWave = true
+      showHashtagInput = true
     }
   }
 
@@ -112,6 +145,20 @@
     if (input.files && input.files.length > 0) {
       coverFile = input.files[0]
     }
+  }
+
+  // ✅ Extract hashtags from input
+  function extractHashtagsFromInput(text: string): string[] {
+    const hashtagRegex = /#[\w\u0600-\u06FF]+/g
+    const matches = text.match(hashtagRegex)
+    return matches ? matches.map(tag => tag.substring(1)) : []
+  }
+
+  // ✅ Clean hashtags input
+  function cleanHashtags(input: string): string {
+    // Extract all hashtags and join with space
+    const tags = extractHashtagsFromInput(input)
+    return tags.join(' ')
   }
 
   // انتشار موج
@@ -156,41 +203,28 @@
         }
       }
 
-      let duration = 0
-      try {
-        const audioElement = new Audio()
-        const url = URL.createObjectURL(audioFile)
-        await new Promise((resolve) => {
-          audioElement.src = url
-          audioElement.onloadedmetadata = () => {
-            duration = Math.floor(audioElement.duration)
-            resolve(null)
-          }
-        })
-        URL.revokeObjectURL(url)
-      } catch (e) {
-        duration = 60
-      }
+      let duration = audioDuration || 0
 
-      // ✅ اصلاح: دسته‌بندی بر اساس ۳۰ ثانیه برای استوری‌ها
+      // ✅ دسته‌بندی بر اساس مدت زمان
       let durationCategory = 'MEDIUM'
       let expiresAt = null
       const now = new Date()
 
-      // استوری‌ها: زیر ۳۰ ثانیه → ۲۴ ساعت
       if (duration < 30) {
         durationCategory = 'SHORT'
         expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
-      } 
-      // موج‌های معمولی: ۳۰ ثانیه تا ۴ دقیقه → ۳۰ روز
-      else if (duration < 240) {
+      } else if (duration < 240) {
         durationCategory = 'MEDIUM'
         expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-      } 
-      // موج‌های طولانی: بالای ۴ دقیقه → ۳۰ روز
-      else {
+      } else {
         durationCategory = 'LONG'
         expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      }
+
+      // ✅ Process hashtags (only for waves > 30 seconds)
+      let finalHashtags = null
+      if (isLongWave && hashtags.trim()) {
+        finalHashtags = cleanHashtags(hashtags)
       }
 
       const { data: waveData, error: waveError } = await supabase
@@ -203,7 +237,9 @@
           duration_category: durationCategory,
           category: category,
           author_id: currentUser.id,
-          expires_at: expiresAt
+          expires_at: expiresAt,
+          hashtags: finalHashtags, // ✅ Add hashtags
+          views_count: 0 // Initialize views
         })
         .select()
         .single()
@@ -216,16 +252,13 @@
           wave_id: waveData.id,
           duration: duration,
           category: category,
-          duration_category: durationCategory
+          duration_category: durationCategory,
+          hashtags: finalHashtags
         }
       })
 
-      // هدایت به صفحه مناسب بر اساس مدت زمان
-      if (durationCategory === 'SHORT') {
-        goto(`/`)
-      } else {
-        goto(`/`)
-      }
+      // هدایت به صفحه اصلی
+      goto(`/`)
 
     } catch (error) {
       console.error('خطا در انتشار موج:', error)
@@ -241,15 +274,28 @@
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
 
+  // ✅ Format duration label
+  function getDurationLabel(seconds: number): string {
+    if (seconds < 30) return '⏱️ استوری (کمتر از ۳۰ ثانیه)'
+    if (seconds < 240) return '🎵 موج (۳۰ ثانیه تا ۴ دقیقه)'
+    return '🎙️ موج بلند (بیش از ۴ دقیقه)'
+  }
+
+  // ✅ Get duration color
+  function getDurationColor(seconds: number): string {
+    if (seconds < 30) return '#10b981'
+    if (seconds < 240) return '#f59e0b'
+    return '#ef4444'
+  }
+
   onMount(() => {
     // Initialize if needed
   })
 </script>
 
-<!-- بقیه کد HTML و CSS به همین شکل می‌ماند -->
 <div class="create-wave-page">
   <div class="container">
-    <!-- هدر با آیکون -->
+    <!-- هدر -->
     <div class="header">
       <button class="back-btn" onclick={() => goto('/')}>
         <ArrowLeft size={20} />
@@ -319,10 +365,25 @@
               <span class="file-name">{audioFile.name}</span>
               <span class="file-size">({(audioFile.size / 1024 / 1024).toFixed(2)} MB)</span>
             </div>
-            <button class="remove-btn" onclick={() => audioFile = null}>
+            <button class="remove-btn" onclick={() => {
+              audioFile = null
+              showHashtagInput = false
+              isLongWave = false
+              audioDuration = 0
+            }}>
               <X size={18} />
             </button>
           </div>
+          
+          <!-- ✅ Duration info -->
+          {#if audioDuration > 0}
+            <div class="duration-info" style="border-color: {getDurationColor(audioDuration)}">
+              <span class="duration-label">📊 مدت زمان: {formatTime(audioDuration)}</span>
+              <span class="duration-type" style="color: {getDurationColor(audioDuration)}">
+                {getDurationLabel(audioDuration)}
+              </span>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
@@ -389,6 +450,49 @@
         </select>
       </div>
     </div>
+
+    <!-- ✅ Hashtag Input (only for waves > 30 seconds) -->
+    {#if showHashtagInput}
+      <div class="section hashtag-section">
+        <div class="section-header">
+          <Hash size={18} />
+          <h3>هشتگ‌ها</h3>
+          <span class="badge-optional">اختیاری</span>
+        </div>
+        
+        <div class="hashtag-field">
+          <input
+            type="text"
+            class="hashtag-input"
+            placeholder="مثال: #موزیک #آموزش #سرگرمی"
+            bind:value={hashtags}
+            maxlength="100"
+          />
+          <div class="hashtag-hint">
+            <span>هشتگ‌ها را با # جدا کنید</span>
+            <span class="hashtag-count">{hashtags.split('#').filter(t => t.trim()).length - 1 || 0}</span>
+          </div>
+        </div>
+        
+        <!-- Live preview of hashtags -->
+        {#if hashtags.trim()}
+          <div class="hashtag-preview">
+            {#each hashtags.split(' ') as tag}
+              {#if tag.trim()}
+                <span class="preview-tag">
+                  {tag.startsWith('#') ? tag : '#' + tag}
+                </span>
+              {/if}
+            {/each}
+          </div>
+        {/if}
+        
+        <div class="hashtag-info">
+          <AlertCircle size={14} />
+          <span>هشتگ‌ها به کشف شدن موج شما کمک می‌کنند</span>
+        </div>
+      </div>
+    {/if}
 
     <!-- دکمه انتشار -->
     <button
@@ -502,6 +606,15 @@
     font-weight: 600;
     margin: 0;
     color: #374151;
+  }
+
+  .badge-optional {
+    font-size: 11px;
+    font-weight: 500;
+    color: #94a3b8;
+    background: #f1f5f9;
+    padding: 2px 10px;
+    border-radius: 10px;
   }
 
   /* Recording Area */
@@ -671,6 +784,7 @@
     background: #eef2ff;
     border-radius: 10px;
     border: 2px solid #c7d2fe;
+    margin-bottom: 12px;
   }
 
   .file-info {
@@ -712,6 +826,28 @@
   .remove-btn:hover {
     background: #fee2e2;
     color: #ef4444;
+  }
+
+  /* ✅ Duration info */
+  .duration-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fafbfc;
+  }
+
+  .duration-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #1a1a2e;
+  }
+
+  .duration-type {
+    font-size: 13px;
+    font-weight: 600;
   }
 
   /* Cover Area */
@@ -847,6 +983,86 @@
     box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
   }
 
+  /* ✅ Hashtag styles */
+  .hashtag-section {
+    background: #f8fafc;
+    padding: 16px;
+    border-radius: 12px;
+    border: 2px solid #e2e8f0;
+  }
+
+  .hashtag-field {
+    position: relative;
+  }
+
+  .hashtag-input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    font-size: 15px;
+    transition: all 0.2s ease;
+    background: white;
+    font-family: inherit;
+  }
+
+  .hashtag-input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+  }
+
+  .hashtag-input::placeholder {
+    color: #94a3b8;
+  }
+
+  .hashtag-hint {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 6px;
+  }
+
+  .hashtag-count {
+    font-weight: 600;
+    color: #6366f1;
+  }
+
+  .hashtag-preview {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px;
+    background: white;
+    border-radius: 8px;
+    min-height: 30px;
+  }
+
+  .preview-tag {
+    padding: 2px 10px;
+    background: #eef2ff;
+    color: #6366f1;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .hashtag-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
+  .hashtag-info :global(svg) {
+    color: #6366f1;
+    flex-shrink: 0;
+  }
+
   /* Publish Button */
   .publish-btn {
     display: flex;
@@ -926,6 +1142,10 @@
     .publish-btn {
       font-size: 16px;
       padding: 14px;
+    }
+
+    .hashtag-section {
+      padding: 12px;
     }
   }
 </style>

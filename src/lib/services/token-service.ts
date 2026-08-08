@@ -293,3 +293,124 @@ export async function getBoostedWaves(): Promise<any[]> {
     return []
   }
 }
+
+// اضافه کردن به token-service.ts
+
+// انتقال توکن به کاربر دیگر
+export async function transferTokens(
+  fromUserId: string,
+  toUserId: string,
+  amount: number,
+  description?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    if (fromUserId === toUserId) {
+      return { success: false, message: 'نمی‌توانید به خودتان توکن انتقال دهید' }
+    }
+
+    if (amount < 10) {
+      return { success: false, message: 'حداقل مقدار انتقال ۱۰ توکن است' }
+    }
+
+    // بررسی موجودی
+    const balance = await getTokenBalance(fromUserId)
+    if (balance < amount) {
+      return { success: false, message: 'موجودی کافی نیست' }
+    }
+
+    // برداشت از فرستنده
+    const spent = await spendTokens(
+      fromUserId,
+      amount,
+      'TRANSFER_SENT',
+      description || `انتقال توکن به کاربر دیگر`,
+      toUserId
+    )
+
+    if (!spent) {
+      return { success: false, message: 'خطا در برداشت توکن' }
+    }
+
+    // واریز به گیرنده
+    const added = await addTokens(
+      toUserId,
+      amount,
+      'TRANSFER_RECEIVED',
+      description || `دریافت توکن از کاربر دیگر`,
+      fromUserId
+    )
+
+    if (!added) {
+      // برگرداندن توکن در صورت خطا
+      await addTokens(
+        fromUserId,
+        amount,
+        'TRANSFER_REFUND',
+        'برگشت توکن به دلیل خطا در انتقال',
+        toUserId
+      )
+      return { success: false, message: 'خطا در واریز توکن. توکن‌ها برگشت داده شد.' }
+    }
+
+    // ثبت رویداد
+    await trackEvent({
+      event_type: 'token_transfer',
+      event_data: {
+        from_user_id: fromUserId,
+        to_user_id: toUserId,
+        amount: amount,
+        description: description
+      }
+    }, fromUserId)
+
+    return { 
+      success: true, 
+      message: `✅ ${amount} توکن با موفقیت انتقال یافت` 
+    }
+
+  } catch (error) {
+    console.error('Error transferring tokens:', error)
+    return { success: false, message: 'خطا در انتقال توکن' }
+  }
+}
+
+// خرید توکن (برای آینده)
+export async function purchaseTokens(
+  userId: string,
+  amount: number,
+  paymentMethod: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    // این تابع برای اتصال به درگاه پرداخت است
+    // فعلاً فقط یک شبیه‌سازی ساده
+    
+    // اعطای توکن
+    const added = await addTokens(
+      userId,
+      amount,
+      'TOKEN_PURCHASE',
+      `خرید ${amount} توکن از طریق ${paymentMethod}`
+    )
+
+    if (!added) {
+      return { success: false, message: 'خطا در خرید توکن' }
+    }
+
+    await trackEvent({
+      event_type: 'token_purchase',
+      event_data: {
+        amount: amount,
+        payment_method: paymentMethod
+      }
+    }, userId)
+
+    return { 
+      success: true, 
+      message: `✅ ${amount} توکن با موفقیت خریداری شد` 
+    }
+
+  } catch (error) {
+    console.error('Error purchasing tokens:', error)
+    return { success: false, message: 'خطا در خرید توکن' }
+  }
+}

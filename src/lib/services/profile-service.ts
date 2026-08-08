@@ -1,5 +1,6 @@
 import { supabase } from '$lib/client/supabase'
 import { createNotification } from './notification-service'
+import { trackEvent } from './analytics-service'
 import type { User } from '$lib/stores/user'
 
 export interface Profile {
@@ -105,7 +106,7 @@ export async function getUserWaves(userId: string): Promise<any[]> {
   }
 }
 
-// ✅ دنبال کردن کاربر - با اعلان
+// ✅ دنبال کردن کاربر - با اعلان و آنالیتیکس
 export async function followUser(followerId: string, followingId: string): Promise<boolean> {
   try {
     if (followerId === followingId) {
@@ -135,6 +136,15 @@ export async function followUser(followerId: string, followingId: string): Promi
 
     if (followError) throw followError
 
+    // ✅ Track follow event for analytics
+    await trackEvent({
+      event_type: 'follow',
+      event_data: {
+        following_id: followingId,
+        follower_id: followerId
+      }
+    }, followerId)
+
     // ✅ Create notification for the person being followed
     const { data: actorData } = await supabase
       .from('users')
@@ -161,7 +171,7 @@ export async function followUser(followerId: string, followingId: string): Promi
   }
 }
 
-// ✅ لغو دنبال کردن
+// ✅ لغو دنبال کردن - با آنالیتیکس
 export async function unfollowUser(followerId: string, followingId: string): Promise<boolean> {
   try {
     const { error } = await supabase
@@ -171,6 +181,16 @@ export async function unfollowUser(followerId: string, followingId: string): Pro
       .eq('following_id', followingId)
 
     if (error) throw error
+
+    // ✅ Track unfollow event for analytics
+    await trackEvent({
+      event_type: 'unfollow',
+      event_data: {
+        following_id: followingId,
+        follower_id: followerId
+      }
+    }, followerId)
+
     return true
   } catch (error) {
     console.error('خطا در لغو دنبال کردن:', error)
