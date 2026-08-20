@@ -24,6 +24,8 @@
   import { faIR } from 'date-fns/locale'
   import { format } from 'date-fns'
   import DailyReward from '$lib/components/gaming/DailyReward.svelte'
+  import { deleteWave } from '$lib/services/wave-service'
+  import { Trash2, AlertTriangle, X } from 'lucide-svelte'
 
   // Icon imports
   import {
@@ -62,6 +64,8 @@
     CalendarDays,
     AlertCircle
   } from 'lucide-svelte'
+	import AdReward from '$lib/components/token/AdReward.svelte';
+	import TaskList from '$lib/components/token/TaskList.svelte';
 
   let profile = $state<Profile | null>(null)
   let waves = $state<any[]>([])
@@ -80,6 +84,11 @@
   let achievements = $state<any[]>([])
   let rank = $state(0)
   let loadingAnalytics = $state(false)
+
+  let showDeleteModal = $state(false)
+  let waveToDelete = $state<string | null>(null)
+  let isDeleting = $state(false)
+  let deleteError = $state<string | null>(null)
 
   // Achievement icon mapping
   function getAchievementIcon(icon: string) {
@@ -220,6 +229,53 @@
     } finally {
       isTogglingFollow = false
     }
+  }
+
+    // ✅ تابع حذف موج
+  async function handleDeleteWave(waveId: string) {
+    if (!currentUser) {
+      goto('/auth/login')
+      return
+    }
+
+    isDeleting = true
+    deleteError = null
+
+    try {
+      const result = await deleteWave(waveId, currentUser.id)
+      
+      if (result.success) {
+        // حذف موج از لیست
+        waves = waves.filter(w => w.id !== waveId)
+        // به‌روزرسانی تعداد موج‌ها در پروفایل
+        if (profile) {
+          profile.waves_count = (profile.waves_count || 1) - 1
+        }
+        showDeleteModal = false
+        waveToDelete = null
+      } else {
+        deleteError = result.message
+      }
+    } catch (error) {
+      console.error('Error deleting wave:', error)
+      deleteError = 'خطا در حذف موج'
+    } finally {
+      isDeleting = false
+    }
+  }
+
+  // ✅ باز کردن مودال حذف
+  function openDeleteModal(waveId: string) {
+    waveToDelete = waveId
+    showDeleteModal = true
+    deleteError = null
+  }
+
+  // ✅ بستن مودال حذف
+  function closeDeleteModal() {
+    showDeleteModal = false
+    waveToDelete = null
+    deleteError = null
   }
 
   function formatTime(date: string): string {
@@ -386,7 +442,8 @@
     </div>
 
     <DailyReward />
-
+    <AdReward />
+    <TaskList />
     <!-- Tabs -->
     {#if isOwnProfile}
       <div class="profile-tabs">
@@ -429,12 +486,72 @@
         {:else}
           <div class="waves-grid">
             {#each waves as wave (wave.id)}
-              <WaveCard 
-                wave={wave} 
-                currentUserId={currentUser?.id} 
-                onLike={() => {}} 
-              />
+              <div class="wave-item-wrapper">
+                <WaveCard 
+                  wave={wave} 
+                  currentUserId={currentUser?.id} 
+                  onLike={() => {}} 
+                />
+                <!-- ✅ دکمه حذف (فقط برای کاربر خودش) -->
+                {#if isOwnProfile}
+                  <button 
+                    class="delete-wave-btn"
+                    onclick={() => openDeleteModal(wave.id)}
+                    title="حذف موج"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                {/if}
+              </div>
             {/each}
+
+
+                <!-- مودال تأیید حذف -->
+              {#if showDeleteModal}
+                <div class="modal-overlay" onclick={closeDeleteModal}>
+                  <div class="modal-content delete-modal" onclick={(e) => e.stopPropagation()}>
+                    <div class="modal-header">
+                      <AlertTriangle size={28} class="delete-warning-icon" />
+                      <h3>حذف موج</h3>
+                      <button class="modal-close" onclick={closeDeleteModal}>
+                        <X size={20} />
+                      </button>
+                    </div>
+                    
+                    <p>آیا از حذف این موج اطمینان دارید؟</p>
+                    <p class="delete-warning">این عمل غیرقابل بازگشت است و تمام نظرات و ریکشن‌های مرتبط نیز حذف خواهند شد.</p>
+
+                    {#if deleteError}
+                      <div class="error-message">
+                        ❌ {deleteError}
+                      </div>
+                    {/if}
+
+                    <div class="modal-actions">
+                      <button class="cancel-btn" onclick={closeDeleteModal} disabled={isDeleting}>
+                        انصراف
+                      </button>
+                      <button 
+                        class="confirm-delete-btn" 
+                        onclick={() => waveToDelete && handleDeleteWave(waveToDelete)}
+                        disabled={isDeleting}
+                      >
+                        {#if isDeleting}
+                          <span class="spinner-small"></span>
+                          در حال حذف...
+                        {:else}
+                          <Trash2 size={18} />
+                          حذف موج
+                        {/if}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+
+
+
+
           </div>
         {/if}
       </div>
@@ -611,6 +728,7 @@
   {/if}
 </div>
 
+
 <style>
   .profile-page {
     max-width: 640px;
@@ -618,6 +736,8 @@
     padding: 16px;
     padding-bottom: 80px;
   }
+
+
 
   /* Loading */
   .loading {
@@ -728,6 +848,321 @@
     position: relative;
     display: inline-block;
   }
+
+/* Wave item wrapper */
+.wave-item-wrapper {
+  position: relative;
+}
+
+/* Delete button - appears on hover */
+.delete-wave-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+  border: none;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0;
+  z-index: 10;
+}
+
+.wave-item-wrapper:hover .delete-wave-btn {
+  opacity: 1;
+}
+
+.delete-wave-btn:hover {
+  background: #ef4444;
+  transform: scale(1.1);
+}
+
+/* Delete Modal */
+.delete-modal {
+  max-width: 420px !important;
+}
+
+.delete-warning-icon {
+  color: #ef4444;
+}
+
+.modal-content.delete-modal p {
+  text-align: center;
+  font-size: 15px;
+  color: #1a1a2e;
+  margin-bottom: 8px;
+}
+
+.delete-warning {
+  font-size: 13px !important;
+  color: #64748b !important;
+  background: #fef2f2;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.error-message {
+  background: #fef2f2;
+  color: #dc2626;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: center;
+  margin: 8px 0;
+}
+
+.confirm-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 2;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: #ef4444;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.confirm-delete-btn:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+.confirm-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.confirm-delete-btn :global(svg) {
+  color: white;
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .delete-wave-btn {
+    opacity: 1;
+    top: 8px;
+    right: 8px;
+    width: 30px;
+    height: 30px;
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .delete-wave-btn :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+}
+/* ✅ مودال حذف */
+.delete-modal {
+  max-width: 420px !important;
+}
+
+.delete-warning-icon {
+  color: #ef4444;
+}
+
+.modal-content.delete-modal p {
+  text-align: center;
+  font-size: 15px;
+  color: #1a1a2e;
+  margin-bottom: 8px;
+}
+
+.delete-warning {
+  font-size: 13px !important;
+  color: #64748b !important;
+  background: #fef2f2;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.error-message {
+  background: #fef2f2;
+  color: #dc2626;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  text-align: center;
+  margin: 8px 0;
+}
+
+.confirm-delete-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 2;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: #ef4444;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.confirm-delete-btn:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+.confirm-delete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.confirm-delete-btn :global(svg) {
+  color: white;
+}
+
+/* ✅ مودال کلی */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+  padding: 16px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background: white;
+  border-radius: 20px;
+  padding: 24px;
+  max-width: 400px;
+  width: 100%;
+  animation: slideUp 0.3s ease;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  flex: 1;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+  background: #f1f5f9;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.cancel-btn {
+  flex: 1;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: #64748b;
+  transition: all 0.2s ease;
+}
+
+.cancel-btn:hover {
+  background: #f1f5f9;
+}
+
+.spinner-small {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .wave-bottom-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 12px;
+  }
+
+  .wave-bottom-info {
+    font-size: 12px;
+    gap: 8px;
+  }
+
+  .delete-wave-btn-bottom {
+    padding: 4px 12px;
+    font-size: 12px;
+  }
+
+  .delete-wave-btn-bottom :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+
+
+
 
   .avatar-edit-btn {
     position: absolute;

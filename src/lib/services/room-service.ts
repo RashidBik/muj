@@ -1,4 +1,5 @@
 import { supabase } from '$lib/client/supabase'
+import { createNotification } from './notification-service'
 import type { User } from '$lib/stores/user'
 
 export interface RoomMessage {
@@ -140,7 +141,7 @@ export async function getRoomAudioMessages(waveId: string): Promise<RoomAudioMes
   }
 }
 
-// Send text message
+// Send text message with notification
 export async function sendRoomMessage(
   waveId: string,
   authorId: string,
@@ -167,6 +168,36 @@ export async function sendRoomMessage(
       .single()
 
     if (error) throw error
+
+    // ✅ NOTIFY WAVE AUTHOR (if not the sender)
+    try {
+      const { data: wave } = await supabase
+        .from('waves')
+        .select('author_id, title')
+        .eq('id', waveId)
+        .single()
+
+      const { data: actor } = await supabase
+        .from('users')
+        .select('name')
+        .eq('id', authorId)
+        .single()
+
+      if (wave && wave.author_id !== authorId) {
+        await createNotification(
+          wave.author_id,
+          'ROOM_MESSAGE',
+          `${actor?.name || 'کاربر'} در اتاق "${wave.title}" پیام داد`,
+          authorId,
+          waveId,
+          undefined,
+          waveId
+        )
+      }
+    } catch (notifError) {
+      console.error('Error creating room message notification:', notifError)
+    }
+
     return {
       ...data,
       is_audio: false,
@@ -179,7 +210,7 @@ export async function sendRoomMessage(
   }
 }
 
-// Send audio message
+// Send audio message with notification
 export async function sendRoomAudioMessage(
   waveId: string,
   authorId: string,
@@ -219,6 +250,36 @@ export async function sendRoomAudioMessage(
       .single()
 
     if (error) throw error
+
+    // ✅ NOTIFY WAVE AUTHOR (if not the sender)
+    try {
+      const { data: wave } = await supabase
+        .from('waves')
+        .select('author_id, title')
+        .eq('id', waveId)
+        .single()
+
+      const { data: actor } = await supabase
+        .from('users')
+        .select('name')
+        .eq('id', authorId)
+        .single()
+
+      if (wave && wave.author_id !== authorId) {
+        await createNotification(
+          wave.author_id,
+          'ROOM_MESSAGE',
+          `${actor?.name || 'کاربر'} یک پیام صوتی در اتاق "${wave.title}" ارسال کرد`,
+          authorId,
+          waveId,
+          undefined,
+          waveId
+        )
+      }
+    } catch (notifError) {
+      console.error('Error creating audio message notification:', notifError)
+    }
+
     return data
   } catch (error) {
     console.error('Error sending audio message:', error)

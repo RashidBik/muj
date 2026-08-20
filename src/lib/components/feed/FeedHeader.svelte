@@ -1,8 +1,9 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import type { User } from '$lib/stores/user'
   import { getUnreadCount } from '$lib/services/notification-service'
+  import { getUserConversations } from '$lib/services/chat-service'
 
   // Icon imports - renamed UserIcon to avoid conflict
   import {
@@ -24,7 +25,8 @@
     onSignOut: () => void
   } = $props()
 
-  let unreadCount = $state(1)
+  let unreadCount = $state(0)
+  let chatUnreadCount = $state(0)
   let isMenuOpen = $state(false)
 
   function goToMyProfile() {
@@ -38,7 +40,11 @@
   }
 
   function goToNotifications() {
-    goto('/notifications')
+    goto('/notification')
+  }
+
+  function goToChat() {
+    goto('/chat')
   }
 
   function goToHome() {
@@ -52,23 +58,53 @@
   async function loadUnreadCount() {
     if (!currentUser) return
     try {
+      // دریافت تعداد اعلان‌ها
       unreadCount = await getUnreadCount(currentUser.id)
+      
+      // دریافت تعداد پیام‌های خوانده نشده از چت
+      const convs = await getUserConversations(currentUser.id)
+      chatUnreadCount = convs.reduce((acc, c) => acc + (c.unread_count || 0), 0)
     } catch (error) {
       console.error('Error loading unread count:', error)
     }
   }
 
+  // ✅ Listen for chat unread count updates
+  function handleChatUnreadUpdate(event: CustomEvent) {
+    chatUnreadCount = event.detail
+  }
+
+  // ✅ Listen for new messages
+  function handleNewMessage(event: CustomEvent) {
+    // Reload unread count when new message arrives
+    loadUnreadCount()
+  }
+
   onMount(() => {
     loadUnreadCount()
 
-    const handler = (event: CustomEvent) => {
+    // Listen for notification count updates
+    const notificationHandler = (event: CustomEvent) => {
       unreadCount = event.detail
     }
+    window.addEventListener('notification-count', notificationHandler as EventListener)
 
-    window.addEventListener('notification-count', handler as EventListener)
+    // ✅ Listen for chat unread count updates
+    const chatUnreadHandler = (event: CustomEvent) => {
+      chatUnreadCount = event.detail
+    }
+    window.addEventListener('chat-unread-count', chatUnreadHandler as EventListener)
+
+    // ✅ Listen for new messages
+    const newMessageHandler = (event: CustomEvent) => {
+      handleNewMessage(event)
+    }
+    window.addEventListener('new-message', newMessageHandler as EventListener)
     
     return () => {
-      window.removeEventListener('notification-count', handler as EventListener)
+      window.removeEventListener('notification-count', notificationHandler as EventListener)
+      window.removeEventListener('chat-unread-count', chatUnreadHandler as EventListener)
+      window.removeEventListener('new-message', newMessageHandler as EventListener)
     }
   })
 
@@ -79,7 +115,8 @@
   })
 </script>
 
-<!-- Fixed sticky header container -->
+<!-- Rest of your template remains the same -->
+<!-- ... -->
 <div class="sticky-topbar">
   <!-- Main Header -->
   <header class="header">
@@ -129,7 +166,7 @@
     <!-- Messages Button -->
     <button 
       class="icon-btn active relative flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors duration-200" 
-      onclick={goToNotifications} 
+      onclick={goToChat} 
       title="پیام‌ها"
     >
       <MessageCircleIcon size={24} class="text-gray-700" />

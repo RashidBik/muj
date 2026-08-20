@@ -116,116 +116,120 @@
   }
 
   async function handleLoadWaves() {
-  loading = true
-  error = null
+    loading = true
+    error = null
 
-  try {
-    await loadBoostedWaves()
+    try {
+      await loadBoostedWaves()
 
-    let query = supabase
-      .from('waves')
-      .select(`
-        *,
-        author:users(
-          id,
-          name,
-          username,
-          avatar
-        )
-      `)
-      .eq('status', 'PUBLISHED')
-      .eq('is_boosted', false)
-      .order('created_at', { ascending: false })
-      .limit(30)
+      // ✅ دریافت فقط موج‌های معتبر (که منقضی نشده‌اند)
+      const now = new Date().toISOString()
 
-    if (selectedCategory !== 'ALL') {
-      query = query.eq('category', selectedCategory)
-    }
+      let query = supabase
+        .from('waves')
+        .select(`
+          *,
+          author:users(
+            id,
+            name,
+            username,
+            avatar
+          )
+        `)
+        .eq('status', 'PUBLISHED')
+        .eq('is_boosted', false)
+        .or(`expires_at.is.null,expires_at.gt.${now}`) // ✅ فقط موج‌های معتبر
+        .order('created_at', { ascending: false })
+        .limit(30)
 
-    const { data, error: fetchError } = await query
-    if (fetchError) throw fetchError
+      if (selectedCategory !== 'ALL') {
+        query = query.eq('category', selectedCategory)
+      }
 
-    const allWaves = data || []
-    
-    // ✅ دریافت ریکشن‌ها
-    if (allWaves.length > 0) {
-      const waveIds = allWaves.map(w => w.id)
+      const { data, error: fetchError } = await query
+      if (fetchError) throw fetchError
+
+      const allWaves = data || []
       
-      // دریافت همه ریکشن‌ها
-      const { data: reactionsData } = await supabase
-        .from('reactions')
-        .select('wave_id, emoji, user_id')
-        .in('wave_id', waveIds)
-
-      console.log('📊 Reactions data:', reactionsData) // برای دیباگ
-
-      // دریافت لایک‌ها
-      const { data: likesData } = currentUser 
-        ? await supabase
-            .from('likes')
-            .select('wave_id')
-            .eq('user_id', currentUser.id)
-            .in('wave_id', waveIds)
-        : { data: [] }
-
-      const likedWaveIds = new Set(likesData?.map(l => l.wave_id) || [])
-      
-      // ✅ گروه‌بندی ریکشن‌ها
-      const reactionsMap: Record<string, any[]> = {}
-      const userReactionsMap: Record<string, string> = {}
-      
-      reactionsData?.forEach(r => {
-        // گروه‌بندی بر اساس موج
-        if (!reactionsMap[r.wave_id]) reactionsMap[r.wave_id] = []
-        const existing = reactionsMap[r.wave_id].find(s => s.emoji === r.emoji)
-        if (existing) {
-          existing.count++
-        } else {
-          reactionsMap[r.wave_id].push({ emoji: r.emoji, count: 1 })
-        }
+      // ✅ دریافت ریکشن‌ها
+      if (allWaves.length > 0) {
+        const waveIds = allWaves.map(w => w.id)
         
-        // ریکشن کاربر فعلی
-        if (currentUser && r.user_id === currentUser.id) {
-          userReactionsMap[r.wave_id] = r.emoji
-        }
-      })
+        // دریافت همه ریکشن‌ها
+        const { data: reactionsData } = await supabase
+          .from('reactions')
+          .select('wave_id, emoji, user_id')
+          .in('wave_id', waveIds)
 
-      console.log('📊 Reactions map:', reactionsMap) // برای دیباگ
-      console.log('📊 User reactions map:', userReactionsMap) // برای دیباگ
+        console.log('📊 Reactions data:', reactionsData) // برای دیباگ
 
-      // ✅ تفکیک موج‌های کوتاه و معمولی
-      shortWaves = allWaves.filter(w => w.duration < 30)
-      const regularWaves = allWaves.filter(w => w.duration >= 30)
-  
-  waves = regularWaves.map(wave => ({
-  ...wave,
-  isLiked: likedWaveIds.has(wave.id),
-  reactions: reactionsMap[wave.id] || [],
-  userReaction: userReactionsMap[wave.id] || null
-}))
+        // دریافت لایک‌ها
+        const { data: likesData } = currentUser 
+          ? await supabase
+              .from('likes')
+              .select('wave_id')
+              .eq('user_id', currentUser.id)
+              .in('wave_id', waveIds)
+          : { data: [] }
 
-      shortWaves = shortWaves.map(wave => ({
-        ...wave,
-        isLiked: likedWaveIds.has(wave.id),
-        reactions: reactionsMap[wave.id] || [],
-        userReaction: userReactionsMap[wave.id] || null
-      }))
+        const likedWaveIds = new Set(likesData?.map(l => l.wave_id) || [])
+        
+        // ✅ گروه‌بندی ریکشن‌ها
+        const reactionsMap: Record<string, any[]> = {}
+        const userReactionsMap: Record<string, string> = {}
+        
+        reactionsData?.forEach(r => {
+          // گروه‌بندی بر اساس موج
+          if (!reactionsMap[r.wave_id]) reactionsMap[r.wave_id] = []
+          const existing = reactionsMap[r.wave_id].find(s => s.emoji === r.emoji)
+          if (existing) {
+            existing.count++
+          } else {
+            reactionsMap[r.wave_id].push({ emoji: r.emoji, count: 1 })
+          }
+          
+          // ریکشن کاربر فعلی
+          if (currentUser && r.user_id === currentUser.id) {
+            userReactionsMap[r.wave_id] = r.emoji
+          }
+        })
 
-      console.log('✅ Waves with reactions:', waves.length)
-      console.log('✅ Short waves with reactions:', shortWaves.length)
+        console.log('📊 Reactions map:', reactionsMap) // برای دیباگ
+        console.log('📊 User reactions map:', userReactionsMap) // برای دیباگ
 
-    } else {
-      waves = []
-      shortWaves = []
+        // ✅ تفکیک موج‌های کوتاه (استوری‌ها) و معمولی
+        shortWaves = allWaves.filter(w => w.duration < 30)
+        const regularWaves = allWaves.filter(w => w.duration >= 30)
+
+        waves = regularWaves.map(wave => ({
+          ...wave,
+          isLiked: likedWaveIds.has(wave.id),
+          reactions: reactionsMap[wave.id] || [],
+          userReaction: userReactionsMap[wave.id] || null
+        }))
+
+        shortWaves = shortWaves.map(wave => ({
+          ...wave,
+          isLiked: likedWaveIds.has(wave.id),
+          reactions: reactionsMap[wave.id] || [],
+          userReaction: userReactionsMap[wave.id] || null
+        }))
+
+        console.log('✅ Waves with reactions:', waves.length)
+        console.log('✅ Short waves with reactions:', shortWaves.length)
+
+      } else {
+        waves = []
+        shortWaves = []
+      }
+
+    } catch (err) {
+      console.error('❌ Error loading waves:', err)
+      error = 'خطا در بارگذاری موج‌ها'
+    } finally {
+      loading = false
     }
-
-  } catch (err) {
-    console.error('❌ Error loading waves:', err)
-    error = 'خطا در بارگذاری موج‌ها'
-  } finally {
-    loading = false
   }
-}
 
   function handleCategoryChange(category: string) {
     selectedCategory = category
@@ -275,9 +279,9 @@
   })
 
   function handleWaveClick(waveId: string, duration: number) {
-      const route = getWaveRoute(waveId, duration)
-      goto(route)
-    }
+    const route = getWaveRoute(waveId, duration)
+    goto(route)
+  }
 </script>
 
 <div class="feed">

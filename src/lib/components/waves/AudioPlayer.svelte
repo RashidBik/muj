@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { incrementWaveViews } from '$lib/services/wave-service'
+  import { trackWavePlay } from '$lib/services/analytics-service'
+  import { user } from '$lib/stores/user'
   
   // Icon imports
   import {
@@ -8,7 +11,8 @@
     Minus,
     Plus,
     Zap,
-    Activity
+    Activity,
+    Music
   } from 'lucide-svelte'
 
   let {
@@ -40,6 +44,13 @@
   let animationId: number | null = null
   let isAudioLoaded = $state(false)
   
+  // ✅ User state for analytics
+  let currentUser = $state<any>(null)
+  
+  // Track if view has been counted
+  let viewCounted = $state(false)
+  let playCount = $state(0)
+  
   // Speed control
   let speedFactor = $state(1.0)
   const MIN_SPEED = 0.4
@@ -56,7 +67,16 @@
   let speedDot: HTMLElement | null = null
 
   // Size constants
-  const SIZE = 500
+  const WIDTH = 600
+  const HEIGHT = 120
+
+  // ✅ Subscribe to user store
+  $effect(() => {
+    const unsubscribe = user.subscribe(value => {
+      currentUser = value
+    })
+    return () => unsubscribe()
+  })
 
   // Expose play/pause control to parent
   export function togglePlay() {
@@ -76,11 +96,44 @@
     if (isPlaying) stopVisualizer()
   }
 
+  // ✅ Increment view when audio is played
+  async function incrementView() {
+    if (viewCounted) return
+    if (!waveId) return
+    
+    try {
+      await incrementWaveViews(waveId)
+      viewCounted = true
+      playCount++
+      console.log(`🎵 View counted for wave ${waveId} (${playCount} plays)`)
+
+      const event = new CustomEvent('wave-viewed', { 
+        detail: { waveId, playCount } 
+      })
+      window.dispatchEvent(event)
+      
+    } catch (error) {
+      console.error('Error incrementing view:', error)
+    }
+  }
+
+  // ✅ Track wave play for analytics
+  async function trackPlay() {
+    if (!currentUser?.id || !waveId) return
+    
+    try {
+      await trackWavePlay(waveId, currentUser.id)
+      console.log(`📊 Tracked play for wave ${waveId} by user ${currentUser.id}`)
+    } catch (error) {
+      console.error('Error tracking wave play:', error)
+    }
+  }
+
   // Initialize canvas
   onMount(() => {
     if (canvas) {
-      canvas.width = SIZE
-      canvas.height = SIZE
+      canvas.width = WIDTH
+      canvas.height = HEIGHT
       ctx = canvas.getContext('2d')
       drawEmptyState()
     }
@@ -103,6 +156,17 @@
       
       audioElement.addEventListener('ended', () => {
         stopVisualizer()
+      })
+
+      // ✅ Track play events
+      audioElement.addEventListener('play', () => {
+        // Count view (only once per session)
+        if (!autoPlay || playCount > 0) {
+          incrementView()
+        }
+        
+        // Track analytics
+        trackPlay()
       })
     }
   })
@@ -200,7 +264,7 @@
       animationId = null
     }
     if (ctx) {
-      ctx.clearRect(0, 0, SIZE, SIZE)
+      ctx.clearRect(0, 0, WIDTH, HEIGHT)
       drawEmptyState()
     }
     if (audioElement) {
@@ -226,18 +290,23 @@
   // Draw empty state
   function drawEmptyState() {
     if (!ctx) return
-    const center = SIZE/2
-    const radius = SIZE/2 - 10
-    ctx.clearRect(0, 0, SIZE, SIZE)
+    ctx.clearRect(0, 0, WIDTH, HEIGHT)
+    
+    // Draw subtle baseline
     ctx.beginPath()
-    ctx.arc(center, center, radius * 0.25, 0, Math.PI * 2)
+    ctx.moveTo(20, HEIGHT / 2)
+    ctx.lineTo(WIDTH - 20, HEIGHT / 2)
     ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-    ctx.lineWidth = 2
+    ctx.lineWidth = 1
     ctx.stroke()
-    ctx.beginPath()
-    ctx.arc(center, center, 4, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.1)'
-    ctx.fill()
+    
+    // Draw subtle center dots
+    for (let x = 40; x < WIDTH - 20; x += 20) {
+      ctx.beginPath()
+      ctx.arc(x, HEIGHT / 2, 1.5, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(255,255,255,0.05)'
+      ctx.fill()
+    }
   }
 
   // Main draw loop
@@ -256,73 +325,101 @@
     
     analyser.getByteFrequencyData(dataArray)
     
+    // Calculate average frequency
     let sum = 0
     for (let i = 0; i < dataArray.length; i++) sum += dataArray[i]
     const avg = sum / dataArray.length
     const freqDisplay = Math.round(20 + (avg / 255) * 80)
     if (freqLabel) freqLabel.textContent = `${freqDisplay} Hz`
     
-    const center = SIZE/2
-    const maxRadius = SIZE/2 - 20
+    ctx.clearRect(0, 0, WIDTH, HEIGHT)
+    
     const barCount = 64
-    const angleStep = (Math.PI * 2) / barCount
-    const halfBarWidth = (angleStep * 0.7) / 2
+    const barWidth = (WIDTH - 40) / barCount
+    const maxHeight = HEIGHT - 30
+    const baseline = HEIGHT / 2
     
-    ctx.clearRect(0, 0, SIZE, SIZE)
-    
-    const gradient = ctx.createRadialGradient(center, center, 0, center, center, maxRadius)
-    gradient.addColorStop(0, 'rgba(99, 102, 241, 0.08)')
-    gradient.addColorStop(1, 'rgba(15, 23, 42, 0)')
+    // Draw background gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT)
+    gradient.addColorStop(0, 'rgba(99, 102, 241, 0.03)')
+    gradient.addColorStop(0.5, 'rgba(99, 102, 241, 0.01)')
+    gradient.addColorStop(1, 'rgba(99, 102, 241, 0.03)')
     ctx.fillStyle = gradient
-    ctx.beginPath()
-    ctx.arc(center, center, maxRadius, 0, Math.PI * 2)
-    ctx.fill()
+    ctx.fillRect(20, 10, WIDTH - 40, HEIGHT - 20)
     
+    // Draw frequency bars
     for (let i = 0; i < barCount; i++) {
       const dataIndex = Math.floor((i / barCount) * dataArray.length)
       const value = dataArray[dataIndex] || 0
-      const norm = Math.max(0.03, value / 255)
-      const innerRadius = 20 + (1 - norm) * 50
-      const outerRadius = 20 + norm * (maxRadius - 25)
-      const angle = i * angleStep - Math.PI/2
+      const norm = Math.max(0.02, value / 255)
       
+      // Calculate bar height (positive and negative)
+      const barHeight = norm * maxHeight
+      const x = 20 + i * barWidth
+      const barWidthActual = Math.max(2, barWidth - 2)
+      
+      // Draw positive bar (upward)
+      const positiveGradient = ctx.createLinearGradient(0, baseline, 0, baseline - barHeight)
+      const hue = (i * 3 + 200) % 360
+      positiveGradient.addColorStop(0, `hsla(${hue}, 80%, 60%, 0.6)`)
+      positiveGradient.addColorStop(1, `hsla(${hue}, 80%, 60%, 0.9)`)
+      
+      ctx.fillStyle = positiveGradient
+      ctx.shadowColor = `hsla(${hue}, 80%, 60%, 0.2)`
+      ctx.shadowBlur = 8
       ctx.beginPath()
-      ctx.arc(center, center, outerRadius, angle - halfBarWidth, angle + halfBarWidth)
-      ctx.arc(center, center, innerRadius, angle + halfBarWidth, angle - halfBarWidth, true)
-      ctx.closePath()
-      
-      const hue = (i * 5 + 200) % 360
-      const lightness = 50 + norm * 40
-      const saturation = 80 + norm * 20
-      ctx.fillStyle = `hsl(${hue}, ${saturation}%, ${lightness}%)`
-      ctx.shadowColor = `hsla(${hue}, 80%, 60%, 0.25)`
-      ctx.shadowBlur = 15
+      ctx.roundRect(x, baseline - barHeight, barWidthActual, barHeight, 2)
       ctx.fill()
+      
+      // Draw negative bar (downward)
+      const negativeGradient = ctx.createLinearGradient(0, baseline, 0, baseline + barHeight * 0.6)
+      negativeGradient.addColorStop(0, `hsla(${hue + 30}, 70%, 50%, 0.3)`)
+      negativeGradient.addColorStop(1, `hsla(${hue + 30}, 70%, 50%, 0.1)`)
+      
+      ctx.fillStyle = negativeGradient
       ctx.shadowBlur = 0
-      ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-      ctx.lineWidth = 0.8
-      ctx.stroke()
+      ctx.beginPath()
+      ctx.roundRect(x, baseline, barWidthActual, barHeight * 0.6, 2)
+      ctx.fill()
     }
     
-    const grad2 = ctx.createRadialGradient(center-10, center-10, 5, center, center, 50)
-    grad2.addColorStop(0, 'rgba(255,255,255,0.08)')
-    grad2.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = grad2
+    // Draw center line with glow
+    ctx.shadowColor = 'rgba(99, 102, 241, 0.3)'
+    ctx.shadowBlur = 10
     ctx.beginPath()
-    ctx.arc(center, center, 50, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.beginPath()
-    ctx.arc(center, center, 5, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.15)'
-    ctx.fill()
+    ctx.moveTo(20, baseline)
+    ctx.lineTo(WIDTH - 20, baseline)
+    ctx.strokeStyle = 'rgba(99, 102, 241, 0.15)'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+    ctx.shadowBlur = 0
     
+    // Draw border glow
     ctx.beginPath()
-    ctx.arc(center, center, maxRadius-2, 0, Math.PI * 2)
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)'
-    ctx.lineWidth = 2
+    ctx.roundRect(20, 10, WIDTH - 40, HEIGHT - 20, 8)
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'
+    ctx.lineWidth = 1
     ctx.stroke()
     
     animationId = requestAnimationFrame(drawVisualizer)
+  }
+
+  // Polyfill for roundRect if needed
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+      if (r > w/2) r = w/2
+      if (r > h/2) r = h/2
+      this.moveTo(x + r, y)
+      this.lineTo(x + w - r, y)
+      this.quadraticCurveTo(x + w, y, x + w, y + r)
+      this.lineTo(x + w, y + h - r)
+      this.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+      this.lineTo(x + r, y + h)
+      this.quadraticCurveTo(x, y + h, x, y + h - r)
+      this.lineTo(x, y + r)
+      this.quadraticCurveTo(x, y, x + r, y)
+      return this
+    }
   }
 
   // Speed controls
@@ -346,7 +443,6 @@
 
   // Keyboard shortcuts
   function handleKeyDown(e: KeyboardEvent) {
-    // Ignore if user is typing in input or textarea
     if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return
     
     if (e.key === ' ' || e.key === 'Space') { 
@@ -370,14 +466,33 @@
 </script>
 
 <div class="audio-player-container">
+  <!-- Background with cover image or default gradient -->
+  <div class="background-layer">
+    {#if coverImage}
+      <img 
+        src={coverImage} 
+        alt={title}
+        class="cover-background"
+        loading="lazy"
+      />
+      <div class="cover-overlay"></div>
+    {:else}
+      <div class="default-background">
+        <div class="default-background-gradient"></div>
+        <div class="default-pattern"></div>
+        <Music class="default-icon" size={48} />
+      </div>
+    {/if}
+  </div>
+
   <div class="controll-container">
     <div class="visualizer-wrapper">
       <canvas 
         bind:this={canvas} 
         class="visualizer-canvas"
         onclick={togglePlay}
-        width="500" 
-        height="500"
+        width="600" 
+        height="120"
       ></canvas>
       
       <button 
@@ -386,9 +501,9 @@
         aria-label={isPlaying ? 'Pause' : 'Play'}
       >
         {#if isPlaying}
-          <Pause size={28} />
+          <Pause size={20} />
         {:else}
-          <Play size={28} />
+          <Play size={20} />
         {/if}
       </button>
     </div>
@@ -406,6 +521,16 @@
           </button>
           <span class="speed-dot inactive" bind:this={speedDot}></span>
         </div>
+        
+        <div class="freq-display">
+          <Zap size={12} />
+          <span class="freq-value" bind:this={freqLabel}>0 Hz</span>
+        </div>
+        
+        <div class="status-display">
+          <Activity size={12} />
+          <span class="status-value" bind:this={statusLabel}>ready</span>
+        </div>
       </div>
     </div>
   </div>
@@ -421,73 +546,162 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(15, 23, 42, 0.75);
-    backdrop-filter: blur(12px);
+    overflow: hidden;
   }
 
+  /* Background Layer */
+  .background-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+  }
+
+  .cover-background {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(20px) brightness(0.4);
+    transform: scale(1.1);
+  }
+
+  .cover-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Default Background */
+  .default-background {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .default-background-gradient {
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: 
+      radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+      radial-gradient(circle at 80% 50%, rgba(56, 189, 248, 0.1) 0%, transparent 50%),
+      radial-gradient(circle at 50% 80%, rgba(244, 114, 182, 0.08) 0%, transparent 50%);
+    animation: gradientShift 15s ease-in-out infinite alternate;
+  }
+
+  @keyframes gradientShift {
+    0% { transform: rotate(0deg) scale(1); }
+    50% { transform: rotate(180deg) scale(1.2); }
+    100% { transform: rotate(360deg) scale(1); }
+  }
+
+  .default-pattern {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: 
+      radial-gradient(circle at 20% 50%, rgba(255,255,255,0.03) 1px, transparent 1px),
+      radial-gradient(circle at 80% 50%, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 60px 60px;
+    background-position: 0 0, 30px 30px;
+    opacity: 0.5;
+  }
+
+  .default-icon {
+    position: relative;
+    z-index: 1;
+    color: rgba(255,255,255,0.06);
+    width: 80px;
+    height: 80px;
+    animation: iconPulse 4s ease-in-out infinite;
+  }
+
+  @keyframes iconPulse {
+    0%, 100% { opacity: 0.06; transform: scale(1) rotate(0deg); }
+    50% { opacity: 0.12; transform: scale(1.1) rotate(5deg); }
+  }
+
+  /* Main Content */
   .controll-container {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: clamp(0.5rem, 2vh, 1rem);
-    padding: clamp(0.5rem, 2vh, 1rem);
+    gap: clamp(0.5rem, 1.5vh, 1rem);
+    padding: clamp(0.5rem, 2vh, 1.5rem);
     width: 100%;
-    max-width: 450px;
-    height: 100%;
-    max-height: 600px;
+    max-width: 650px;
   }
 
   .visualizer-wrapper {
     position: relative;
-    width: clamp(140px, min(40vw, 40vh), 280px);
-    aspect-ratio: 1/1;
+    width: 100%;
+    max-width: 600px;
     margin: 0 auto;
-    flex-shrink: 0;
   }
 
-  .visualizer-wrapper::after {
+  .visualizer-wrapper::before {
     content: '';
     position: absolute;
     inset: -8px;
-    border-radius: 9999px;
-    background: linear-gradient(145deg, #38bdf8, #818cf8, #f472b6);
-    opacity: 0.2;
-    filter: blur(12px);
+    border-radius: 12px;
+    background: linear-gradient(135deg, #38bdf8, #818cf8, #f472b6);
+    opacity: 0.1;
+    filter: blur(16px);
     z-index: -1;
     animation: softPulse 3s ease-in-out infinite alternate;
   }
 
   @keyframes softPulse {
-    0% { opacity: 0.15; transform: scale(0.98); }
-    100% { opacity: 0.3; transform: scale(1.02); }
+    0% { opacity: 0.08; transform: scale(0.98); }
+    100% { opacity: 0.15; transform: scale(1.02); }
   }
 
   .visualizer-canvas {
     display: block;
     width: 100%;
-    height: 100%;
-    border-radius: 9999px;
-    background: radial-gradient(circle at center, #1e293b, #0f172a);
-    box-shadow: 0 20px 40px -10px rgba(0,0,0,0.8);
+    height: auto;
+    aspect-ratio: 600/120;
+    border-radius: 8px;
+    background: radial-gradient(ellipse at center, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
+    box-shadow: 0 8px 32px -8px rgba(0,0,0,0.6);
     cursor: pointer;
     transition: filter 0.2s;
   }
 
   .visualizer-canvas:active {
-    filter: brightness(1.1);
+    filter: brightness(1.05);
   }
 
   .play-toggle-btn {
     position: absolute;
     top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: clamp(40px, 10vw, 52px);
-    height: clamp(40px, 10vw, 52px);
+    left: 12px;
+    transform: translateY(-50%);
+    width: clamp(32px, 6vw, 44px);
+    height: clamp(32px, 6vw, 44px);
     border-radius: 50%;
     border: none;
-    background: rgba(255,255,255,0.15);
+    background: rgba(255,255,255,0.12);
     backdrop-filter: blur(8px);
     cursor: pointer;
     display: flex;
@@ -499,21 +713,21 @@
   }
 
   .play-toggle-btn:hover {
-    transform: translate(-50%, -50%) scale(1.1);
-    background: rgba(255,255,255,0.25);
+    transform: translateY(-50%) scale(1.1);
+    background: rgba(255,255,255,0.2);
   }
 
   .play-toggle-btn :global(svg) {
-    width: clamp(18px, 5vw, 28px);
-    height: clamp(18px, 5vw, 28px);
+    width: clamp(14px, 3vw, 20px);
+    height: clamp(14px, 3vw, 20px);
   }
 
   .controls {
     width: 100%;
+    max-width: 600px;
     display: flex;
     flex-direction: column;
-    gap: clamp(0.3rem, 1vh, 0.6rem);
-    flex-shrink: 0;
+    gap: clamp(0.3rem, 0.8vh, 0.6rem);
   }
 
   .controls-row {
@@ -521,32 +735,31 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: clamp(0.2rem, 0.5vw, 0.4rem);
+    gap: clamp(0.3rem, 0.5vw, 0.6rem);
   }
 
   .speed-control {
     display: flex;
     align-items: center;
-    gap: clamp(0.1rem, 0.3vw, 0.2rem);
+    gap: clamp(0.1rem, 0.3vw, 0.3rem);
     background: rgba(255,255,255,0.06);
     backdrop-filter: blur(4px);
     border: 1px solid rgba(255,255,255,0.08);
-    padding: clamp(0.1rem, 0.3vh, 0.2rem) clamp(0.2rem, 0.5vw, 0.4rem);
+    padding: clamp(0.1rem, 0.3vh, 0.3rem) clamp(0.3rem, 0.5vw, 0.6rem);
     border-radius: 9999px;
-    flex-shrink: 0;
   }
 
   .speed-label {
     color: rgba(255,255,255,0.5);
-    font-size: clamp(0.4rem, 1vw, 0.55rem);
+    font-size: clamp(0.4rem, 0.8vw, 0.55rem);
     font-weight: 600;
     letter-spacing: 0.05em;
     margin-right: clamp(0.05rem, 0.2vw, 0.15rem);
   }
 
   .speed-btn {
-    width: clamp(16px, 4vw, 24px);
-    height: clamp(16px, 4vw, 24px);
+    width: clamp(18px, 3vw, 26px);
+    height: clamp(18px, 3vw, 26px);
     border-radius: 50%;
     border: none;
     background: rgba(255,255,255,0.1);
@@ -556,7 +769,6 @@
     align-items: center;
     justify-content: center;
     transition: all 0.15s ease;
-    flex-shrink: 0;
   }
 
   .speed-btn:hover {
@@ -568,26 +780,24 @@
   }
 
   .speed-btn :global(svg) {
-    width: clamp(8px, 2vw, 14px);
-    height: clamp(8px, 2vw, 14px);
+    width: clamp(8px, 1.5vw, 14px);
+    height: clamp(8px, 1.5vw, 14px);
   }
 
   .speed-display {
     color: rgba(255,255,255,0.9);
     font-family: monospace;
-    font-size: clamp(0.45rem, 1.2vw, 0.7rem);
-    width: clamp(24px, 6vw, 36px);
+    font-size: clamp(0.5rem, 1vw, 0.7rem);
+    width: clamp(28px, 5vw, 38px);
     text-align: center;
-    flex-shrink: 0;
   }
 
   .speed-dot {
-    width: clamp(3px, 0.8vw, 5px);
-    height: clamp(3px, 0.8vw, 5px);
+    width: clamp(3px, 0.6vw, 5px);
+    height: clamp(3px, 0.6vw, 5px);
     border-radius: 9999px;
     background: #4ade80;
     transition: all 0.2s;
-    flex-shrink: 0;
   }
 
   .speed-dot.inactive {
@@ -595,74 +805,100 @@
     opacity: 0.4;
   }
 
+  .freq-display, .status-display {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: rgba(255,255,255,0.04);
+    padding: 0.2rem 0.6rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+
+  .freq-display :global(svg), .status-display :global(svg) {
+    width: clamp(10px, 1.5vw, 14px);
+    height: clamp(10px, 1.5vw, 14px);
+    opacity: 0.5;
+    color: rgba(255,255,255,0.5);
+  }
+
+  .freq-value, .status-value {
+    color: rgba(255,255,255,0.6);
+    font-size: clamp(0.35rem, 0.7vw, 0.5rem);
+    font-family: monospace;
+    letter-spacing: 0.02em;
+  }
+
   /* Mobile */
   @media (max-width: 480px) {
     .controll-container {
-      max-height: 100vh;
       gap: 0.4rem;
       padding: 0.5rem;
     }
 
-    .visualizer-wrapper {
-      width: clamp(120px, 35vw, 160px);
-    }
-
     .play-toggle-btn {
-      width: clamp(32px, 8vw, 40px);
-      height: clamp(32px, 8vw, 40px);
+      left: 8px;
+      width: 28px;
+      height: 28px;
     }
 
     .play-toggle-btn :global(svg) {
-      width: clamp(14px, 4vw, 20px);
-      height: clamp(14px, 4vw, 20px);
+      width: 12px;
+      height: 12px;
+    }
+
+    .controls-row {
+      gap: 0.2rem;
     }
 
     .speed-control {
-      padding: 0.1rem 0.2rem;
+      padding: 0.1rem 0.3rem;
     }
 
     .speed-btn {
-      width: 14px;
-      height: 14px;
-      min-width: 14px;
-      min-height: 14px;
+      width: 16px;
+      height: 16px;
     }
 
     .speed-btn :global(svg) {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
     }
 
     .speed-display {
       font-size: 0.4rem;
-      width: 20px;
-      min-width: 20px;
+      width: 22px;
     }
 
-    .speed-label {
-      font-size: 0.35rem;
+    .freq-display, .status-display {
+      padding: 0.1rem 0.4rem;
     }
 
-    .speed-dot {
-      width: 3px;
-      height: 3px;
+    .freq-value, .status-value {
+      font-size: 0.3rem;
+    }
+
+    .default-icon {
+      width: 48px;
+      height: 48px;
     }
   }
 
   /* Extra small phones */
   @media (max-width: 360px) {
-    .visualizer-wrapper {
-      width: clamp(80px, 30vw, 110px);
-    }
-
     .play-toggle-btn {
-      width: clamp(28px, 7vw, 32px);
-      height: clamp(28px, 7vw, 32px);
+      width: 24px;
+      height: 24px;
     }
 
     .play-toggle-btn :global(svg) {
-      width: clamp(12px, 3vw, 16px);
-      height: clamp(12px, 3vw, 16px);
+      width: 10px;
+      height: 10px;
+    }
+
+    .default-icon {
+      width: 32px;
+      height: 32px;
     }
   }
 
@@ -672,30 +908,35 @@
       flex-direction: row;
       gap: 0.5rem;
       padding: 0.3rem 0.8rem;
-      max-height: 100vh;
+      max-width: 90vw;
     }
 
     .visualizer-wrapper {
-      width: clamp(80px, 20vh, 120px);
+      max-width: 400px;
     }
 
     .play-toggle-btn {
-      width: 28px;
-      height: 28px;
+      width: 24px;
+      height: 24px;
     }
 
     .play-toggle-btn :global(svg) {
-      width: 14px;
-      height: 14px;
+      width: 12px;
+      height: 12px;
     }
 
     .controls {
       max-width: 200px;
-      gap: 0.2rem;
     }
 
     .controls-row {
+      flex-direction: column;
       gap: 0.15rem;
+    }
+
+    .default-icon {
+      width: 32px;
+      height: 32px;
     }
   }
 </style>

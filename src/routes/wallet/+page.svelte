@@ -1,356 +1,380 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
-  import { supabase } from '$lib/client/supabase'
   import { user } from '$lib/stores/user'
-  import { session } from '$lib/stores/auth'
   import { 
     getTokenBalance, 
     getTokenTransactions,
-    TokenRewards,
+    transferTokens 
   } from '$lib/services/token-service'
-  import type { TokenTransaction } from '$lib/services/token-service'
-  import { formatDistanceToNow } from 'date-fns'
-  import { faIR } from 'date-fns/locale'
-
-  // Icon imports
-  import {
-    ArrowLeft,
-    Wallet,
-    Coins,
-    Rocket,
-    Gift,
-    TrendingUp,
-    TrendingDown,
-    Award,
-    Mic,
-    Heart,
-    MessageCircle,
-    Users,
-    CalendarDays,
-    Sparkles,
-    Flame,
-    Crown,
-    Zap,
-    Send,
-    Plus,
-    Minus,
-    Clock,
-    AlertCircle,
-    BarChart3,
-    Target,
-    CheckCircle,
-    List,
-    Filter,
-    ThumbsUp,
-    ThumbsDown
-  } from 'lucide-svelte'
+  import { getUserAdStats } from '$lib/services/ad-service'
+  import { getUserActiveBoosts } from '$lib/services/boost-service'
+  import { Coins, Send, History, TrendingUp, TrendingDown, Clock, ArrowUpRight, ArrowDownRight, Users, Eye, Rocket, ArrowLeft } from 'lucide-svelte'
+import Wallet from '$lib/components/token/Wallet.svelte'
 
   let currentUser = $state<any>(null)
   let balance = $state(0)
-  let transactions = $state<TokenTransaction[]>([])
+  let transactions = $state<any[]>([])
+  let adStats = $state<any>(null)
+  let activeBoosts = $state<any[]>([])
   let loading = $state(true)
-  let activeTab = $state('all')
+  let showTransfer = $state(false)
+  let transferAmount = $state('')
+  let transferTo = $state('')
+  let transferMessage = $state('')
+  let isTransferring = $state(false)
 
-  // Transaction icon mapping
-  function getTransactionIcon(type: string) {
-    const iconMap: Record<string, any> = {
-      'WELCOME_BONUS': Gift,
-      'DAILY_REWARD': CalendarDays,
-      'WAVE_PUBLISH': Mic,
-      'LIKE_RECEIVED': Heart,
-      'COMMENT_RECEIVED': MessageCircle,
-      'REFERRAL': Users,
-      'BOOST_WAVE': Rocket,
-      'GIFT': Gift,
-      'SPEND': Send
+  $effect(() => {
+    const unsubscribe = user.subscribe(value => {
+      currentUser = value
+      if (value) {
+        loadWalletData(value.id)
+      }
+    })
+    return () => unsubscribe()
+  })
+
+  async function loadWalletData(userId: string) {
+    loading = true
+    try {
+      const [balanceData, transactionsData, adStatsData, boostsData] = await Promise.all([
+        getTokenBalance(userId),
+        getTokenTransactions(userId, 20),
+        getUserAdStats(userId),
+        getUserActiveBoosts(userId)
+      ])
+
+      balance = balanceData
+      transactions = transactionsData
+      adStats = adStatsData
+      activeBoosts = boostsData
+    } catch (error) {
+      console.error('Error loading wallet data:', error)
+    } finally {
+      loading = false
     }
-    return iconMap[type] || Coins
+  }
+
+  async function handleTransfer() {
+    if (!currentUser) return
+
+    const amount = parseInt(transferAmount)
+    if (isNaN(amount) || amount < 10) {
+      transferMessage = 'حداقل مقدار انتقال ۱۰ توکن است'
+      return
+    }
+
+    if (amount > balance) {
+      transferMessage = 'موجودی کافی نیست'
+      return
+    }
+
+    if (!transferTo.trim()) {
+      transferMessage = 'لطفاً نام کاربری گیرنده را وارد کنید'
+      return
+    }
+
+    isTransferring = true
+    transferMessage = ''
+
+    try {
+      // پیدا کردن کاربر گیرنده
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('username', transferTo.trim())
+        .maybeSingle()
+
+      if (userError || !userData) {
+        transferMessage = 'کاربر مورد نظر یافت نشد'
+        isTransferring = false
+        return
+      }
+
+      if (userData.id === currentUser.id) {
+        transferMessage = 'نمی‌توانید به خودتان توکن انتقال دهید'
+        isTransferring = false
+        return
+      }
+
+      const result = await transferTokens(
+        currentUser.id,
+        userData.id,
+        amount,
+        `انتقال توکن به ${transferTo}`
+      )
+
+      if (result.success) {
+        transferMessage = result.message
+        await loadWalletData(currentUser.id)
+        setTimeout(() => {
+          showTransfer = false
+          transferAmount = ''
+          transferTo = ''
+          transferMessage = ''
+        }, 3000)
+      } else {
+        transferMessage = result.message
+      }
+    } catch (error) {
+      console.error('Error transferring tokens:', error)
+      transferMessage = 'خطا در انتقال توکن'
+    } finally {
+      isTransferring = false
+    }
+  }
+
+  function getTransactionIcon(type: string) {
+    const icons: Record<string, any> = {
+      'WELCOME_BONUS': Coins,
+      'PUBLISH_WAVE': TrendingUp,
+      'LIKE_RECEIVED': TrendingUp,
+      'COMMENT_RECEIVED': TrendingUp,
+      'REFERRAL': Users,
+      'DAILY_LOGIN': Clock,
+      'DAILY_STREAK': TrendingUp,
+      'BOOST_WAVE': Rocket,
+      'TASK_COMPLETED': TrendingUp,
+      'AD_REWARD': Eye,
+      'TRANSFER_SENT': ArrowUpRight,
+      'TRANSFER_RECEIVED': ArrowDownRight,
+    }
+    return icons[type] || Coins
   }
 
   function getTransactionColor(type: string): string {
-    const colorMap: Record<string, string> = {
+    const colors: Record<string, string> = {
       'WELCOME_BONUS': '#10b981',
-      'DAILY_REWARD': '#10b981',
-      'WAVE_PUBLISH': '#6366f1',
-      'LIKE_RECEIVED': '#ef4444',
-      'COMMENT_RECEIVED': '#f59e0b',
-      'REFERRAL': '#8b5cf6',
-      'BOOST_WAVE': '#f97316',
-      'GIFT': '#ec4899',
-      'SPEND': '#ef4444'
+      'PUBLISH_WAVE': '#10b981',
+      'LIKE_RECEIVED': '#10b981',
+      'COMMENT_RECEIVED': '#10b981',
+      'REFERRAL': '#10b981',
+      'DAILY_LOGIN': '#10b981',
+      'DAILY_STREAK': '#10b981',
+      'TASK_COMPLETED': '#10b981',
+      'AD_REWARD': '#10b981',
+      'TRANSFER_RECEIVED': '#10b981',
+      'BOOST_WAVE': '#ef4444',
+      'TRANSFER_SENT': '#ef4444',
     }
-    return colorMap[type] || '#64748b'
+    return colors[type] || '#64748b'
   }
 
   function getTransactionLabel(type: string): string {
     const labels: Record<string, string> = {
       'WELCOME_BONUS': 'پاداش خوش‌آمدگویی',
-      'DAILY_REWARD': 'پاداش روزانه',
-      'WAVE_PUBLISH': 'انتشار موج',
-      'LIKE_RECEIVED': 'لایک دریافت شده',
-      'COMMENT_RECEIVED': 'نظر دریافت شده',
+      'PUBLISH_WAVE': 'انتشار موج',
+      'LIKE_RECEIVED': 'دریافت لایک',
+      'COMMENT_RECEIVED': 'دریافت نظر',
       'REFERRAL': 'دعوت دوست',
+      'DAILY_LOGIN': 'ورود روزانه',
+      'DAILY_STREAK': 'رکورد روزانه',
       'BOOST_WAVE': 'تقویت موج',
-      'GIFT': 'هدیه',
-      'SPEND': 'خرج کردن'
+      'TASK_COMPLETED': 'تکمیل تسک',
+      'AD_REWARD': 'پاداش تبلیغات',
+      'TRANSFER_SENT': 'انتقال توکن',
+      'TRANSFER_RECEIVED': 'دریافت توکن',
     }
     return labels[type] || type
   }
 
-  onMount(async () => {
-    console.log('💰 Wallet page mounted')
-    
+  function formatDate(date: string): string {
     try {
-      const { data: { session: userSession } } = await supabase.auth.getSession()
-      
-      if (!userSession?.user) {
-        console.log('❌ No session, redirecting to login')
-        goto('/auth/login')
-        return
-      }
-
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('id, email, name, username, avatar, bio')
-        .eq('id', userSession.user.id)
-        .maybeSingle()
-
-      if (userError || !userData) {
-        console.error('Error fetching user:', userError)
-        goto('/')
-        return
-      }
-
-      currentUser = userData
-      
-      await loadWallet(userData.id)
-      
-    } catch (error) {
-      console.error('Error in wallet page:', error)
-      goto('/')
-    } finally {
-      loading = false
-    }
-  })
-
-  async function loadWallet(userId: string) {
-    loading = true
-    try {
-      balance = await getTokenBalance(userId)
-      transactions = await getTokenTransactions(userId, 50)
-      console.log(`💰 Balance: ${balance}, Transactions: ${transactions.length}`)
-    } catch (error) {
-      console.error('Error loading wallet:', error)
-    } finally {
-      loading = false
-    }
-  }
-
-  function formatTime(date: string): string {
-    try {
-      return formatDistanceToNow(new Date(date), { 
-        addSuffix: true,
-        locale: faIR
+      return new Date(date).toLocaleDateString('fa-IR', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       })
     } catch {
       return 'چندی پیش'
     }
   }
 
-  const filteredTransactions = transactions.filter(t => {
-    if (activeTab === 'earn') return t.amount > 0
-    if (activeTab === 'spend') return t.amount < 0
-    return true
-  })
-
-  // Get stats
-  const totalEarned = transactions.filter(t => t.amount > 0).reduce((sum, t) => sum + t.amount, 0)
-  const totalSpent = transactions.filter(t => t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0)
+  function goBack() {
+    history.back()
+  }
 </script>
-
+<Wallet />
 <div class="wallet-page">
   <div class="wallet-container">
     <!-- Header -->
     <div class="header">
-      <button class="back-btn" onclick={() => history.back()}>
+      <button class="back-btn" onclick={goBack}>
         <ArrowLeft size={20} />
         بازگشت
       </button>
-      <h1>
-        <Wallet size={22} />
-        کیف پول
-      </h1>
+      <h1>کیف پول</h1>
+      <div></div>
     </div>
 
-    <!-- Balance Card -->
-    <div class="balance-card">
-      <div class="balance-icon">
-        <Coins size={48} />
+    {#if loading}
+      <div class="loading">
+        <div class="spinner"></div>
+        <p>در حال بارگذاری...</p>
       </div>
-      <div class="balance-info">
-        <div class="balance-label">موجودی کل</div>
-        <div class="balance-amount">
-          {#if loading}
-            <span class="loading-text">...</span>
-          {:else}
-            {balance.toLocaleString()} <span class="token-label">توکن</span>
-          {/if}
+    {:else}
+      <!-- Balance Card -->
+      <div class="balance-card">
+        <div class="balance-icon">
+          <Coins size={32} />
         </div>
-        {#if !loading && balance === 0}
-          <div class="empty-balance-note">
-            <Sparkles size={14} />
-            با فعالیت‌های روزانه توکن جمع کنید!
+        <div class="balance-info">
+          <div class="balance-label">موجودی شما</div>
+          <div class="balance-amount">{balance.toLocaleString('fa-IR')}</div>
+          <div class="balance-sub">توکن</div>
+        </div>
+      </div>
+
+      <!-- Quick Stats -->
+      <div class="quick-stats">
+        <div class="stat-item">
+          <span class="stat-value">{transactions.filter(t => t.amount > 0).length}</span>
+          <span class="stat-label">دریافتی‌ها</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">{transactions.filter(t => t.amount < 0).length}</span>
+          <span class="stat-label">پرداخت‌ها</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">{activeBoosts.length}</span>
+          <span class="stat-label">بوست‌های فعال</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">{adStats?.tokens_earned || 0}</span>
+          <span class="stat-label">توکن از تبلیغات</span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="actions">
+        <button class="action-btn transfer-btn" onclick={() => showTransfer = !showTransfer}>
+          <Send size={18} />
+          انتقال توکن
+        </button>
+        <button class="action-btn history-btn" onclick={() => document.getElementById('transactions')?.scrollIntoView({ behavior: 'smooth' })}>
+          <History size={18} />
+          تاریخچه
+        </button>
+      </div>
+
+      <!-- Transfer Form -->
+      {#if showTransfer}
+        <div class="transfer-form">
+          <h4>انتقال توکن</h4>
+          <p class="transfer-hint">حداقل ۱۰ توکن - فقط به کاربران دیگر</p>
+          
+          <div class="form-group">
+            <label>نام کاربری گیرنده</label>
+            <input
+              type="text"
+              placeholder="نام کاربری را وارد کنید..."
+              bind:value={transferTo}
+              disabled={isTransferring}
+            />
+          </div>
+          
+          <div class="form-group">
+            <label>مقدار توکن</label>
+            <input
+              type="number"
+              placeholder="مقدار توکن..."
+              bind:value={transferAmount}
+              min="10"
+              max={balance}
+              disabled={isTransferring}
+            />
+            <span class="max-hint">حداکثر: {balance.toLocaleString('fa-IR')}</span>
+          </div>
+
+          {#if transferMessage}
+            <div class="transfer-message {transferMessage.includes('✅') ? 'success' : 'error'}">
+              {transferMessage}
+            </div>
+          {/if}
+
+          <div class="form-actions">
+            <button class="cancel-btn" onclick={() => {
+              showTransfer = false
+              transferAmount = ''
+              transferTo = ''
+              transferMessage = ''
+            }} disabled={isTransferring}>
+              انصراف
+            </button>
+            <button class="submit-btn" onclick={handleTransfer} disabled={isTransferring}>
+              {#if isTransferring}
+                <span class="spinner-small"></span>
+                در حال انتقال...
+              {:else}
+                انتقال توکن
+              {/if}
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Active Boosts -->
+      {#if activeBoosts.length > 0}
+        <div class="active-boosts">
+          <h3>🚀 بوست‌های فعال</h3>
+          <div class="boosts-list">
+            {#each activeBoosts as boost (boost.id)}
+              <div class="boost-item">
+                <div class="boost-icon">🚀</div>
+                <div class="boost-info">
+                  <div class="boost-title">{boost.wave?.title || 'موج'}</div>
+                  <div class="boost-duration">
+                    تا {new Date(boost.expires_at).toLocaleDateString('fa-IR')}
+                  </div>
+                </div>
+                <div class="boost-status">
+                  <span class="status-badge active">فعال</span>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Transactions -->
+      <div id="transactions" class="transactions-section">
+        <div class="section-header">
+          <History size={20} />
+          <h3>تاریخچه تراکنش‌ها</h3>
+          <span class="tx-count">{transactions.length}</span>
+        </div>
+
+        {#if transactions.length === 0}
+          <div class="empty-transactions">
+            <Coins size={48} />
+            <p>هیچ تراکنشی وجود ندارد</p>
+            <span>با فعالیت در اپلیکیشن توکن جمع‌آوری کنید</span>
+          </div>
+        {:else}
+          <div class="transactions-list">
+            {#each transactions as tx (tx.id)}
+              {@const Icon = getTransactionIcon(tx.type)}
+              {@const color = getTransactionColor(tx.type)}
+              {@const isPositive = tx.amount > 0}
+              <div class="transaction-item">
+                <div class="tx-icon" style="background: {color}20; color: {color}">
+                  <Icon size={18} />
+                </div>
+                <div class="tx-info">
+                  <div class="tx-type">{getTransactionLabel(tx.type)}</div>
+                  <div class="tx-date">{formatDate(tx.created_at)}</div>
+                </div>
+                <div class="tx-amount {isPositive ? 'positive' : 'negative'}">
+                  {isPositive ? '+' : ''}{tx.amount.toLocaleString('fa-IR')}
+                </div>
+              </div>
+            {/each}
           </div>
         {/if}
       </div>
-    </div>
-
-    <!-- Quick Stats -->
-    {#if !loading && transactions.length > 0}
-      <div class="quick-stats">
-        <div class="stat-item">
-          <div class="stat-icon earn-icon"><TrendingUp size={16} /></div>
-          <div class="stat-info">
-            <span class="stat-label">مجموع دریافتی</span>
-            <span class="stat-value positive">+{totalEarned.toLocaleString()}</span>
-          </div>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat-item">
-          <div class="stat-icon spend-icon"><TrendingDown size={16} /></div>
-          <div class="stat-info">
-            <span class="stat-label">مجموع خرج شده</span>
-            <span class="stat-value negative">-{totalSpent.toLocaleString()}</span>
-          </div>
-        </div>
-      </div>
     {/if}
-
-    <!-- Quick Actions -->
-    <div class="quick-actions">
-      <button class="action-btn boost-btn" onclick={() => alert('Coming soon: Boost a wave!')}>
-        <Rocket size={18} />
-        تقویت موج (۳۰ توکن)
-      </button>
-      <button class="action-btn gift-btn" onclick={() => alert('Coming soon: Send gift!')}>
-        <Gift size={18} />
-        ارسال هدیه
-      </button>
-    </div>
-
-    <!-- Transactions -->
-    <div class="transactions-section">
-      <div class="section-header">
-        <div class="section-title">
-          <List size={20} />
-          <h2>تراکنش‌ها</h2>
-          <span class="tx-count">{filteredTransactions.length}</span>
-        </div>
-        <div class="tabs">
-          <button 
-            class="tab {activeTab === 'all' ? 'active' : ''}" 
-            onclick={() => activeTab = 'all'}
-          >
-            همه
-          </button>
-          <button 
-            class="tab {activeTab === 'earn' ? 'active' : ''}" 
-            onclick={() => activeTab = 'earn'}
-          >
-            <TrendingUp size={14} />
-            دریافتی
-          </button>
-          <button 
-            class="tab {activeTab === 'spend' ? 'active' : ''}" 
-            onclick={() => activeTab = 'spend'}
-          >
-            <TrendingDown size={14} />
-            خرج شده
-          </button>
-        </div>
-      </div>
-
-      {#if loading}
-        <div class="loading">
-          <div class="spinner-small"></div>
-          در حال بارگذاری...
-        </div>
-      {:else if filteredTransactions.length === 0}
-        <div class="empty">
-          <Coins size={48} />
-          <p>هنوز تراکنشی انجام نشده است</p>
-          <span class="empty-hint">با انتشار موج یا دریافت لایک شروع کنید!</span>
-        </div>
-      {:else}
-        <div class="transactions-list">
-          {#each filteredTransactions as tx (tx.id)}
-            {@const IconComponent = getTransactionIcon(tx.type)}
-            {@const iconColor = getTransactionColor(tx.type)}
-            <div class="transaction-item {tx.amount > 0 ? 'earn' : 'spend'}">
-              <div class="tx-icon-wrapper" style="background: {iconColor}20;">
-                <IconComponent size={20} color={iconColor} />
-              </div>
-              <div class="tx-info">
-                <div class="tx-label">{getTransactionLabel(tx.type)}</div>
-                <div class="tx-time">
-                  <Clock size={12} />
-                  {formatTime(tx.created_at)}
-                </div>
-              </div>
-              <div class="tx-amount {tx.amount > 0 ? 'positive' : 'negative'}">
-                {tx.amount > 0 ? '+' : ''}{tx.amount}
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- How to earn tokens -->
-    <div class="earn-info">
-      <div class="earn-header">
-        <Target size={20} />
-        <h3>چگونه توکن جمع کنیم؟</h3>
-      </div>
-      <div class="earn-grid">
-        <div class="earn-item">
-          <span class="earn-label">
-            <Mic size={14} />
-            انتشار موج
-          </span>
-          <span class="earn-value">+{TokenRewards.PUBLISH_WAVE}</span>
-        </div>
-        <div class="earn-item">
-          <span class="earn-label">
-            <Heart size={14} />
-            لایک دریافت شده
-          </span>
-          <span class="earn-value">+{TokenRewards.LIKE_RECEIVED}</span>
-        </div>
-        <div class="earn-item">
-          <span class="earn-label">
-            <MessageCircle size={14} />
-            نظر دریافت شده
-          </span>
-          <span class="earn-value">+{TokenRewards.COMMENT_RECEIVED}</span>
-        </div>
-        <div class="earn-item">
-          <span class="earn-label">
-            <Users size={14} />
-            دعوت دوست
-          </span>
-          <span class="earn-value">+{TokenRewards.REFERRAL}</span>
-        </div>
-        <div class="earn-item highlight">
-          <span class="earn-label">
-            <CalendarDays size={14} />
-            پاداش روزانه
-          </span>
-          <span class="earn-value">+{TokenRewards.DAILY_LOGIN}</span>
-        </div>
-      </div>
-    </div>
   </div>
 </div>
 
@@ -362,7 +386,7 @@
   }
 
   .wallet-container {
-    max-width: 640px;
+    max-width: 600px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
@@ -373,25 +397,18 @@
   .header {
     display: flex;
     align-items: center;
-    gap: 16px;
+    justify-content: space-between;
     background: white;
-    padding: 14px 20px;
+    padding: 16px 20px;
     border-radius: 12px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
   .header h1 {
-    display: flex;
-    align-items: center;
-    gap: 10px;
     font-size: 20px;
     font-weight: 700;
     margin: 0;
     color: #1a1a2e;
-  }
-
-  .header h1 :global(svg) {
-    color: #6366f1;
   }
 
   .back-btn {
@@ -401,10 +418,9 @@
     background: none;
     border: none;
     color: #6366f1;
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 14px;
     cursor: pointer;
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-radius: 8px;
     transition: all 0.2s ease;
   }
@@ -413,25 +429,52 @@
     background: #f1f5f9;
   }
 
+  /* Loading */
+  .loading {
+    text-align: center;
+    padding: 60px 20px;
+    background: white;
+    border-radius: 12px;
+  }
+
+  .spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #e2e8f0;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
   /* Balance Card */
   .balance-card {
     background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-    color: white;
-    padding: 28px 24px;
     border-radius: 16px;
+    padding: 24px;
     display: flex;
     align-items: center;
     gap: 20px;
+    color: white;
     box-shadow: 0 4px 20px rgba(99, 102, 241, 0.3);
-    transition: transform 0.3s ease;
   }
 
-  .balance-card:hover {
-    transform: translateY(-2px);
+  .balance-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 50%;
   }
 
   .balance-icon :global(svg) {
-    color: rgba(255,255,255,0.9);
+    color: white;
   }
 
   .balance-info {
@@ -441,111 +484,48 @@
   .balance-label {
     font-size: 14px;
     opacity: 0.8;
-    font-weight: 500;
   }
 
   .balance-amount {
     font-size: 32px;
     font-weight: 700;
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
+    line-height: 1.2;
   }
 
-  .token-label {
-    font-size: 16px;
-    font-weight: 500;
-    opacity: 0.8;
-  }
-
-  .empty-balance-note {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    background: rgba(255,255,255,0.15);
-    border-radius: 8px;
-    margin-top: 8px;
+  .balance-sub {
     font-size: 13px;
-  }
-
-  .loading-text {
-    opacity: 0.5;
+    opacity: 0.7;
   }
 
   /* Quick Stats */
   .quick-stats {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
     background: white;
+    padding: 12px;
     border-radius: 12px;
-    padding: 12px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-    align-items: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
   .stat-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex: 1;
-  }
-
-  .stat-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .earn-icon {
-    background: #d1fae5;
-  }
-
-  .earn-icon :global(svg) {
-    color: #10b981;
-  }
-
-  .spend-icon {
-    background: #fee2e2;
-  }
-
-  .spend-icon :global(svg) {
-    color: #ef4444;
-  }
-
-  .stat-info {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .stat-label {
-    font-size: 12px;
-    color: #94a3b8;
+    text-align: center;
   }
 
   .stat-value {
-    font-size: 15px;
+    display: block;
+    font-size: 18px;
     font-weight: 700;
+    color: #1a1a2e;
   }
 
-  .stat-value.positive {
-    color: #10b981;
+  .stat-label {
+    font-size: 11px;
+    color: #94a3b8;
   }
 
-  .stat-value.negative {
-    color: #ef4444;
-  }
-
-  .stat-divider {
-    width: 1px;
-    height: 30px;
-    background: #e2e8f0;
-  }
-
-  /* Quick Actions */
-  .quick-actions {
+  /* Actions */
+  .actions {
     display: flex;
     gap: 12px;
   }
@@ -556,70 +536,265 @@
     align-items: center;
     justify-content: center;
     gap: 8px;
-    padding: 12px 16px;
+    padding: 14px;
     border: none;
     border-radius: 10px;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: 15px;
+    font-weight: 600;
     cursor: pointer;
     transition: all 0.2s ease;
-    font-family: inherit;
   }
 
-  .boost-btn {
-    background: #fef3c7;
-    color: #92400e;
+  .action-btn :global(svg) {
+    flex-shrink: 0;
   }
 
-  .boost-btn:hover {
-    background: #fde68a;
+  .transfer-btn {
+    background: #6366f1;
+    color: white;
+  }
+
+  .transfer-btn:hover {
+    background: #4f46e5;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
   }
 
-  .gift-btn {
-    background: #fce7f3;
-    color: #831843;
+  .history-btn {
+    background: #f1f5f9;
+    color: #1a1a2e;
   }
 
-  .gift-btn:hover {
-    background: #fbcfe8;
+  .history-btn:hover {
+    background: #e2e8f0;
+  }
+
+  /* Transfer Form */
+  .transfer-form {
+    background: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    animation: slideDown 0.3s ease;
+  }
+
+  @keyframes slideDown {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .transfer-form h4 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+    color: #1a1a2e;
+  }
+
+  .transfer-hint {
+    font-size: 13px;
+    color: #94a3b8;
+    margin: 0 0 16px 0;
+  }
+
+  .form-group {
+    margin-bottom: 12px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1a1a2e;
+    margin-bottom: 4px;
+  }
+
+  .form-group input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 2px solid #e2e8f0;
+    border-radius: 10px;
+    font-size: 15px;
+    transition: all 0.2s ease;
+  }
+
+  .form-group input:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+  }
+
+  .max-hint {
+    display: block;
+    text-align: right;
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 4px;
+  }
+
+  .transfer-message {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin: 12px 0;
+  }
+
+  .transfer-message.success {
+    background: #ecfdf5;
+    color: #10b981;
+    border: 1px solid #86efac;
+  }
+
+  .transfer-message.error {
+    background: #fef2f2;
+    color: #ef4444;
+    border: 1px solid #fca5a5;
+  }
+
+  .form-actions {
+    display: flex;
+    gap: 12px;
+  }
+
+  .cancel-btn {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: white;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #64748b;
+    transition: all 0.2s ease;
+  }
+
+  .cancel-btn:hover:not(:disabled) {
+    background: #f1f5f9;
+  }
+
+  .submit-btn {
+    flex: 2;
+    padding: 10px;
+    border: none;
+    border-radius: 10px;
+    background: #6366f1;
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+  }
+
+  .submit-btn:hover:not(:disabled) {
+    background: #4f46e5;
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(236, 72, 153, 0.2);
+  }
+
+  .submit-btn:disabled, .cancel-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .spinner-small {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255,255,255,0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  /* Active Boosts */
+  .active-boosts {
+    background: white;
+    padding: 16px;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  .active-boosts h3 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    color: #1a1a2e;
+  }
+
+  .boosts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .boost-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: #f8fafc;
+    border-radius: 8px;
+  }
+
+  .boost-icon {
+    font-size: 24px;
+  }
+
+  .boost-info {
+    flex: 1;
+  }
+
+  .boost-title {
+    font-weight: 600;
+    color: #1a1a2e;
+    font-size: 14px;
+  }
+
+  .boost-duration {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
+  .status-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 12px;
+  }
+
+  .status-badge.active {
+    background: #ecfdf5;
+    color: #10b981;
   }
 
   /* Transactions */
   .transactions-section {
     background: white;
+    padding: 16px;
     border-radius: 12px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
 
   .section-header {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  .section-title {
-    display: flex;
     align-items: center;
     gap: 10px;
+    margin-bottom: 16px;
   }
 
-  .section-title :global(svg) {
+  .section-header :global(svg) {
     color: #6366f1;
   }
 
-  .section-title h2 {
+  .section-header h3 {
     margin: 0;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 700;
     color: #1a1a2e;
+    flex: 1;
   }
 
   .tx-count {
@@ -630,109 +805,56 @@
     border-radius: 12px;
   }
 
-  .tabs {
-    display: flex;
-    gap: 6px;
-  }
-
-  .tab {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 6px 14px;
-    border: none;
-    border-radius: 8px;
-    background: #f1f5f9;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-family: inherit;
-    color: #64748b;
-  }
-
-  .tab :global(svg) {
+  .empty-transactions {
+    text-align: center;
+    padding: 40px 20px;
     color: #94a3b8;
   }
 
-  .tab:hover {
-    background: #e2e8f0;
-  }
-
-  .tab.active {
-    background: #6366f1;
-    color: white;
-  }
-
-  .tab.active :global(svg) {
-    color: white;
-  }
-
-  .loading, .empty {
-    text-align: center;
-    padding: 40px 20px;
-    color: #64748b;
-  }
-
-  .empty :global(svg) {
+  .empty-transactions :global(svg) {
     color: #cbd5e1;
     margin-bottom: 12px;
   }
 
-  .empty p {
+  .empty-transactions p {
     margin: 0 0 4px 0;
-    font-weight: 500;
+    color: #1a1a2e;
+    font-weight: 600;
   }
 
-  .empty-hint {
+  .empty-transactions span {
     font-size: 13px;
-    color: #94a3b8;
   }
 
   .transactions-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     max-height: 400px;
     overflow-y: auto;
-  }
-
-  .transactions-list::-webkit-scrollbar {
-    width: 4px;
-  }
-
-  .transactions-list::-webkit-scrollbar-track {
-    background: #f1f5f9;
-    border-radius: 2px;
-  }
-
-  .transactions-list::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 2px;
   }
 
   .transaction-item {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 12px 16px;
-    border-radius: 10px;
+    gap: 12px;
+    padding: 10px 14px;
     background: #f8fafc;
+    border-radius: 8px;
     transition: all 0.2s ease;
   }
 
   .transaction-item:hover {
     background: #f1f5f9;
-    transform: translateX(4px);
   }
 
-  .tx-icon-wrapper {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
+  .tx-icon {
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
     flex-shrink: 0;
   }
 
@@ -740,22 +862,14 @@
     flex: 1;
   }
 
-  .tx-label {
+  .tx-type {
     font-weight: 600;
     color: #1a1a2e;
     font-size: 14px;
   }
 
-  .tx-time {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  .tx-date {
     font-size: 12px;
-    color: #94a3b8;
-    margin-top: 2px;
-  }
-
-  .tx-time :global(svg) {
     color: #94a3b8;
   }
 
@@ -772,153 +886,26 @@
     color: #ef4444;
   }
 
-  /* Earn Info */
-  .earn-info {
-    background: white;
-    border-radius: 12px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-  }
-
-  .earn-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-
-  .earn-header :global(svg) {
-    color: #6366f1;
-  }
-
-  .earn-header h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 700;
-    color: #1a1a2e;
-  }
-
-  .earn-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-
-  .earn-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 14px;
-    background: #f8fafc;
-    border-radius: 8px;
-    font-size: 13px;
-    transition: all 0.2s ease;
-  }
-
-  .earn-item:hover {
-    background: #f1f5f9;
-  }
-
-  .earn-item.highlight {
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-  }
-
-  .earn-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: #1a1a2e;
-    font-weight: 500;
-  }
-
-  .earn-label :global(svg) {
-    color: #6366f1;
-  }
-
-  .earn-value {
-    font-weight: 700;
-    color: #10b981;
-  }
-
-  /* Spinner */
-  .spinner-small {
-    width: 24px;
-    height: 24px;
-    border: 3px solid #e2e8f0;
-    border-top-color: #6366f1;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin: 0 auto 12px;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  /* Responsive */
   @media (max-width: 640px) {
     .wallet-page {
       padding: 12px;
     }
 
-    .balance-card {
-      padding: 20px 16px;
-    }
-
-    .balance-amount {
-      font-size: 26px;
-    }
-
     .quick-stats {
-      padding: 10px 16px;
-      flex-direction: column;
-      gap: 8px;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px;
     }
 
-    .stat-divider {
-      width: 100%;
-      height: 1px;
-    }
-
-    .quick-actions {
-      flex-direction: column;
-    }
-
-    .earn-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .section-header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .tabs {
-      justify-content: stretch;
-    }
-
-    .tab {
-      flex: 1;
-      justify-content: center;
-    }
-
-    .transaction-item {
-      padding: 10px 12px;
-    }
-  }
-
-  @media (max-width: 400px) {
     .balance-amount {
-      font-size: 22px;
+      font-size: 24px;
     }
 
-    .tx-label {
-      font-size: 13px;
+    .balance-card {
+      padding: 16px;
     }
 
-    .tx-amount {
-      font-size: 14px;
+    .actions {
+      flex-direction: column;
     }
   }
 </style>

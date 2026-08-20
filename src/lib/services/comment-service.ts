@@ -1,6 +1,6 @@
 import { supabase } from '$lib/client/supabase'
-import { user } from '$lib/stores/user'
-import { get } from 'svelte/store'
+import { createNotification } from './notification-service'
+import { trackEvent } from './analytics-service'
 
 export interface Comment {
   id: string
@@ -119,7 +119,7 @@ export async function getCommentCount(waveId: string): Promise<number> {
 }
 
 /**
- * Add a new comment
+ * Add a new comment with notification and analytics
  */
 export async function addComment(
   waveId: string,
@@ -164,6 +164,79 @@ export async function addComment(
     // Update wave's comments count
     await supabase.rpc('increment_wave_comments', { wave_id: waveId })
 
+    // ✅ CREATE NOTIFICATIONS
+    try {
+      // Get wave details
+      const { data: wave } = await supabase
+        .from('waves')
+        .select('author_id, title')
+        .eq('id', waveId)
+        .single()
+
+      // Get comment author details
+      const { data: actor } = await supabase
+        .from('users')
+        .select('name')
+        .eq('id', authorId)
+        .single()
+
+      const actorName = actor?.name || 'کاربر'
+      const shortContent = trimmedContent.length > 50 
+        ? trimmedContent.substring(0, 50) + '...' 
+        : trimmedContent
+
+      // Notification for wave author
+      if (wave && wave.author_id !== authorId) {
+        await createNotification(
+          wave.author_id,
+          'COMMENT',
+          `${actorName} به موج "${wave.title}" نظر داد: "${shortContent}"`,
+          authorId,
+          waveId,
+          data.id
+        )
+      }
+
+      // If replying to a comment, notify the parent comment author
+      if (parentId) {
+        const { data: parentComment } = await supabase
+          .from('comments')
+          .select('author_id')
+          .eq('id', parentId)
+          .single()
+
+        if (parentComment && parentComment.author_id !== authorId) {
+          await createNotification(
+            parentComment.author_id,
+            'COMMENT',
+            `${actorName} به نظر شما در موج "${wave?.title || ''}" پاسخ داد`,
+            authorId,
+            waveId,
+            data.id
+          )
+        }
+      }
+    } catch (notifError) {
+      console.error('Error creating comment notification:', notifError)
+      // Don't fail the comment if notification fails
+    }
+
+    // ✅ TRACK ANALYTICS EVENT
+    try {
+      await trackEvent({
+        event_type: 'comment',
+        event_data: {
+          wave_id: waveId,
+          comment_id: data.id,
+          parent_id: parentId || null,
+          content_length: trimmedContent.length
+        }
+      }, authorId)
+    } catch (analyticsError) {
+      console.error('Error tracking comment analytics:', analyticsError)
+      // Don't fail the comment if analytics fails
+    }
+
     return data
   } catch (error) {
     console.error('Error adding comment:', error)
@@ -199,6 +272,19 @@ export async function deleteComment(commentId: string, userId: string): Promise<
     // Update wave's comments count
     await supabase.rpc('decrement_wave_comments', { wave_id: comment.wave_id })
 
+    // ✅ TRACK ANALYTICS EVENT
+    try {
+      await trackEvent({
+        event_type: 'comment_delete',
+        event_data: {
+          comment_id: commentId,
+          wave_id: comment.wave_id
+        }
+      }, userId)
+    } catch (analyticsError) {
+      console.error('Error tracking comment delete analytics:', analyticsError)
+    }
+
     return true
   } catch (error) {
     console.error('Error deleting comment:', error)
@@ -207,7 +293,7 @@ export async function deleteComment(commentId: string, userId: string): Promise<
 }
 
 /**
- * Toggle like on a comment
+ * Toggle like on a comment with notification and analytics
  */
 export async function toggleCommentLike(commentId: string, userId: string): Promise<boolean> {
   try {
@@ -231,6 +317,20 @@ export async function toggleCommentLike(commentId: string, userId: string): Prom
       if (deleteError) throw deleteError
 
       await supabase.rpc('decrement_comment_likes', { comment_id: commentId })
+
+      // ✅ TRACK ANALYTICS EVENT - Unlike
+      try {
+        await trackEvent({
+          event_type: 'unlike',
+          event_data: {
+            comment_id: commentId,
+            target_type: 'comment'
+          }
+        }, userId)
+      } catch (analyticsError) {
+        console.error('Error tracking comment unlike analytics:', analyticsError)
+      }
+
       return false
     } else {
       // Like
@@ -244,6 +344,53 @@ export async function toggleCommentLike(commentId: string, userId: string): Prom
       if (insertError) throw insertError
 
       await supabase.rpc('increment_comment_likes', { comment_id: commentId })
+
+      // ✅ CREATE NOTIFICATION FOR COMMENT AUTHOR
+      try {
+        const { data: comment } = await supabase
+          .from('comments')
+          .select(`
+            author_id,
+            wave_id,
+            waves:wave_id (title)
+          `)
+          .eq('id', commentId)
+          .single()
+
+        if (comment && comment.author_id !== userId) {
+          const { data: actor } = await supabase
+            .from('users')
+            .select('name')
+            .eq('id', userId)
+            .single()
+
+          await createNotification(
+            comment.author_id,
+            'LIKE',
+            `${actor?.name || 'کاربر'} به نظر شما در موج "${comment.waves?.title || ''}" لایک کرد`,
+            userId,
+            comment.wave_id,
+            commentId
+          )
+        }
+      } catch (notifError) {
+        console.error('Error creating comment like notification:', notifError)
+      }
+
+      // ✅ TRACK ANALYTICS EVENT - Like
+      try {
+        await trackEvent({
+          event_type: 'like',
+          event_data: {
+            comment_id: commentId,
+            target_type: 'comment',
+            wave_id: comment?.wave_id
+          }
+        }, userId)
+      } catch (analyticsError) {
+        console.error('Error tracking comment like analytics:', analyticsError)
+      }
+
       return true
     }
   } catch (error) {

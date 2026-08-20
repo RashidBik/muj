@@ -77,7 +77,7 @@ export async function trackEvent(
       page_url_param: pageUrl,
       referrer_param: referrer,
       user_agent_param: navigator.userAgent,
-      ip_address_param: null, // Will be handled by server
+      ip_address_param: null,
       session_id_param: sessionId
     })
 
@@ -110,7 +110,7 @@ export async function updateDailyStats(metricName: string): Promise<boolean> {
   }
 }
 
-// Get session ID (persistent for the session)
+// Get session ID
 function getSessionId(): string {
   if (!browser) return ''
   
@@ -231,7 +231,6 @@ export async function getUserEngagement(userId: string) {
 
     if (error) throw error
 
-    // Calculate engagement score
     const events = data || []
     const scores: Record<string, number> = {
       'wave_publish': 10,
@@ -259,5 +258,19 @@ export async function getUserEngagement(userId: string) {
   } catch (error) {
     console.error('Error getting user engagement:', error)
     return null
+  }
+}
+
+// ✅ Track wave play (calls the RPC function)
+export async function trackWavePlay(waveId: string, userId: string): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('track_wave_play', {
+      wave_id_param: waveId,
+      user_id_param: userId
+    })
+    
+    if (error) throw error
+  } catch (error) {
+    console.error('Error tracking wave play:', error)
   }
 }

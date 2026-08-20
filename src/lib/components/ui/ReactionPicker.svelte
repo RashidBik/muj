@@ -116,6 +116,7 @@
   .reaction-popup {
     direction: rtl;
     position: absolute;
+    /* bottom: -20%; */
     z-index: 50;
     background: white;
     border-radius: 16px;
@@ -127,13 +128,13 @@
   }
 
   .reaction-popup.bottom {
-    top: calc(100% + 8px);
+    top: calc(100% + -18px);
     /* left: 50%; */
     transform: translateX(-90%);
   }
 
   .reaction-popup.top {
-    /* bottom: calc(100% + 8px);
+    /* bottom: calc(100% + 18px);
     left: 50%;
     transform: translateX(-50%); */
   }
@@ -185,6 +186,7 @@
 
   .reaction-emoji {
     font-size: 24px;
+    /* padding: 4px; */
     flex-shrink: 0;
   }
 

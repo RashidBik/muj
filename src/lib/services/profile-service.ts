@@ -1,4 +1,7 @@
 import { supabase } from '$lib/client/supabase'
+import { createNotification } from './notification-service'
+import { trackEvent } from './analytics-service'
+import type { User } from '$lib/stores/user'
 
 export interface Profile {
   id: string
@@ -17,7 +20,6 @@ export interface Profile {
 // دریافت اطلاعات پروفایل
 export async function getProfile(username: string, currentUserId?: string): Promise<Profile | null> {
   try {
-    // دریافت اطلاعات کاربر
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('id, email, name, username, bio, avatar, created_at')
@@ -29,7 +31,6 @@ export async function getProfile(username: string, currentUserId?: string): Prom
 
     const userId = userData.id
 
-    // دریافت تعداد موج‌ها
     const { count: wavesCount, error: wavesError } = await supabase
       .from('waves')
       .select('*', { count: 'exact', head: true })
@@ -38,7 +39,6 @@ export async function getProfile(username: string, currentUserId?: string): Prom
 
     if (wavesError) throw wavesError
 
-    // دریافت تعداد دنبال‌کننده‌ها
     const { count: followersCount, error: followersError } = await supabase
       .from('follows')
       .select('*', { count: 'exact', head: true })
@@ -46,7 +46,6 @@ export async function getProfile(username: string, currentUserId?: string): Prom
 
     if (followersError) throw followersError
 
-    // دریافت تعداد دنبال‌شونده‌ها
     const { count: followingCount, error: followingError } = await supabase
       .from('follows')
       .select('*', { count: 'exact', head: true })
@@ -54,7 +53,6 @@ export async function getProfile(username: string, currentUserId?: string): Prom
 
     if (followingError) throw followingError
 
-    // بررسی آیا کاربر جاری دنبال می‌کند
     let isFollowing = false
     if (currentUserId && currentUserId !== userId) {
       const { data: followData, error: followError } = await supabase
@@ -108,21 +106,64 @@ export async function getUserWaves(userId: string): Promise<any[]> {
   }
 }
 
-// دنبال کردن کاربر
+// ✅ دنبال کردن کاربر - با اعلان و آنالیتیکس
 export async function followUser(followerId: string, followingId: string): Promise<boolean> {
   try {
     if (followerId === followingId) {
       throw new Error('نمی‌توانید خودتان را دنبال کنید')
     }
 
-    const { error } = await supabase
+    // Check if already following
+    const { data: existing, error: checkError } = await supabase
+      .from('follows')
+      .select('*')
+      .eq('follower_id', followerId)
+      .eq('following_id', followingId)
+      .maybeSingle()
+
+    if (checkError) throw checkError
+    if (existing) {
+      throw new Error('از قبل دنبال می‌کنید')
+    }
+
+    // Start transaction
+    const { error: followError } = await supabase
       .from('follows')
       .insert({
         follower_id: followerId,
         following_id: followingId
       })
 
-    if (error) throw error
+    if (followError) throw followError
+
+    // ✅ Track follow event for analytics
+    await trackEvent({
+      event_type: 'follow',
+      event_data: {
+        following_id: followingId,
+        follower_id: followerId
+      }
+    }, followerId)
+
+    // ✅ Create notification for the person being followed
+    const { data: actorData } = await supabase
+      .from('users')
+      .select('name, username')
+      .eq('id', followerId)
+      .single()
+
+    const actorName = actorData?.name || 'کاربر'
+    
+    await createNotification(
+      followingId, // user_id (person receiving notification)
+      'FOLLOW', // type
+      `${actorName} شما را دنبال کرد`, // message
+      followerId // actor_id (who followed)
+    )
+
+    // ✅ Update unread count for header
+    updateNotificationCount(followingId)
+
     return true
   } catch (error) {
     console.error('خطا در دنبال کردن:', error)
@@ -130,7 +171,7 @@ export async function followUser(followerId: string, followingId: string): Promi
   }
 }
 
-// لغو دنبال کردن
+// ✅ لغو دنبال کردن - با آنالیتیکس
 export async function unfollowUser(followerId: string, followingId: string): Promise<boolean> {
   try {
     const { error } = await supabase
@@ -140,6 +181,16 @@ export async function unfollowUser(followerId: string, followingId: string): Pro
       .eq('following_id', followingId)
 
     if (error) throw error
+
+    // ✅ Track unfollow event for analytics
+    await trackEvent({
+      event_type: 'unfollow',
+      event_data: {
+        following_id: followingId,
+        follower_id: followerId
+      }
+    }, followerId)
+
     return true
   } catch (error) {
     console.error('خطا در لغو دنبال کردن:', error)
@@ -168,5 +219,122 @@ export async function updateProfile(
   } catch (error) {
     console.error('خطا در به‌روزرسانی پروفایل:', error)
     throw error
+  }
+}
+
+// ✅ دریافت لیست فالووینگ‌ها
+export async function getFollowing(userId: string): Promise<any[]> {
+  try {
+    console.log('📥 Getting following for user:', userId)
+    
+    if (!userId) {
+      console.warn('⚠️ No userId provided')
+      return []
+    }
+
+    const { data: followData, error: followError } = await supabase
+      .from('follows')
+      .select('following_id')
+      .eq('follower_id', userId)
+
+    if (followError) {
+      console.error('❌ Error getting follow data:', followError)
+      return []
+    }
+
+    console.log('📊 Follow data:', followData)
+
+    if (!followData || followData.length === 0) {
+      console.log('ℹ️ No following found')
+      return []
+    }
+
+    const followingIds = followData.map(f => f.following_id)
+    console.log('📊 Following IDs:', followingIds)
+
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('id, name, username, avatar, bio')
+      .in('id', followingIds)
+
+    if (usersError) {
+      console.error('❌ Error getting users:', usersError)
+      return []
+    }
+
+    console.log('✅ Following users:', users)
+    return users || []
+
+  } catch (error) {
+    console.error('❌ Error getting following:', error)
+    return []
+  }
+}
+
+// ✅ دریافت لیست فالوورها
+export async function getFollowers(userId: string): Promise<any[]> {
+  try {
+    console.log('📥 Getting followers for user:', userId)
+    
+    if (!userId) {
+      console.warn('⚠️ No userId provided')
+      return []
+    }
+
+    const { data: followData, error: followError } = await supabase
+      .from('follows')
+      .select('follower_id')
+      .eq('following_id', userId)
+
+    if (followError) {
+      console.error('❌ Error getting follow data:', followError)
+      return []
+    }
+
+    console.log('📊 Follow data:', followData)
+
+    if (!followData || followData.length === 0) {
+      console.log('ℹ️ No followers found')
+      return []
+    }
+
+    const followerIds = followData.map(f => f.follower_id)
+    console.log('📊 Follower IDs:', followerIds)
+
+    const { data: users, error: usersError } = await supabase
+      .from('users')
+      .select('id, name, username, avatar, bio')
+      .in('id', followerIds)
+
+    if (usersError) {
+      console.error('❌ Error getting users:', usersError)
+      return []
+    }
+
+    console.log('✅ Followers users:', users)
+    return users || []
+
+  } catch (error) {
+    console.error('❌ Error getting followers:', error)
+    return []
+  }
+}
+
+// ✅ Helper function to update notification count
+async function updateNotificationCount(userId: string) {
+  try {
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('is_read', false)
+
+    if (!error && count !== null) {
+      window.dispatchEvent(new CustomEvent('notification-count', { 
+        detail: count 
+      }))
+    }
+  } catch (error) {
+    console.error('Error updating notification count:', error)
   }
 }
