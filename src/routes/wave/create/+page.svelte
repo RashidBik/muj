@@ -4,7 +4,6 @@
   import { user } from '$lib/stores/user'
   import { onMount } from 'svelte'
   import { trackEvent } from '$lib/services/analytics-service'
-  import { extractHashtags } from '$lib/services/wave-service'
   
   // Icon imports
   import { 
@@ -38,11 +37,12 @@
   let audioChunks: Blob[] = []
   let currentUser: any = null
   
-  // ✅ Hashtag state
+  // Hashtag state
   let hashtags = $state('')
   let showHashtagInput = $state(false)
   let audioDuration = $state(0)
   let isLongWave = $state(false)
+  let errorMessage = $state<string | null>(null)
 
   // دسته‌بندی‌ها
   const categories = [
@@ -81,7 +81,6 @@
         isRecording = false
         stream.getTracks().forEach(track => track.stop())
         
-        // ✅ Get duration after recording
         getAudioDuration(audioFile)
       }
 
@@ -119,7 +118,7 @@
     }
   }
 
-  // ✅ Get audio duration
+  // Get audio duration
   function getAudioDuration(file: File) {
     try {
       const audioElement = new Audio()
@@ -127,7 +126,6 @@
       audioElement.src = url
       audioElement.onloadedmetadata = () => {
         audioDuration = Math.floor(audioElement.duration)
-        // ✅ Show hashtag input only for waves > 30 seconds
         isLongWave = audioDuration >= 30
         showHashtagInput = isLongWave
         URL.revokeObjectURL(url)
@@ -147,22 +145,23 @@
     }
   }
 
-  // ✅ Extract hashtags from input
+  // Extract hashtags from input
   function extractHashtagsFromInput(text: string): string[] {
     const hashtagRegex = /#[\w\u0600-\u06FF]+/g
     const matches = text.match(hashtagRegex)
     return matches ? matches.map(tag => tag.substring(1)) : []
   }
 
-  // ✅ Clean hashtags input
+  // Clean hashtags input
   function cleanHashtags(input: string): string {
-    // Extract all hashtags and join with space
     const tags = extractHashtagsFromInput(input)
     return tags.join(' ')
   }
 
   // انتشار موج
   async function publishWave() {
+    errorMessage = null
+    
     if (!currentUser) {
       alert('لطفاً ابتدا وارد شوید.')
       goto('/auth/login')
@@ -182,30 +181,52 @@
     isUploading = true
 
     try {
+      console.log('1. Starting upload process...')
+      
+      // 1. Upload audio file
       const audioFileName = `${Date.now()}_${audioFile.name}`
+      console.log('2. Uploading audio as:', audioFileName)
+      
       const { data: audioData, error: audioError } = await supabase.storage
         .from('waves')
-        .upload(audioFileName, audioFile)
+        .upload(audioFileName, audioFile, {
+          cacheControl: '3600',
+          upsert: false
+        })
 
-      if (audioError) throw audioError
+      if (audioError) {
+        console.error('Audio upload error:', audioError)
+        throw new Error(`خطا در آپلود فایل صوتی: ${audioError.message}`)
+      }
+      console.log('3. Audio uploaded successfully')
 
       const audioUrl = supabase.storage.from('waves').getPublicUrl(audioFileName).data.publicUrl
+      console.log('4. Audio URL obtained')
 
+      // 2. Upload cover image (if exists)
       let coverUrl = null
       if (coverFile) {
         const coverFileName = `cover_${Date.now()}_${coverFile.name}`
+        console.log('5. Uploading cover as:', coverFileName)
+        
         const { data: coverData, error: coverError } = await supabase.storage
           .from('covers')
-          .upload(coverFileName, coverFile)
+          .upload(coverFileName, coverFile, {
+            cacheControl: '3600',
+            upsert: false
+          })
 
         if (!coverError) {
           coverUrl = supabase.storage.from('covers').getPublicUrl(coverFileName).data.publicUrl
+          console.log('6. Cover uploaded successfully')
+        } else {
+          console.warn('Cover upload failed:', coverError)
         }
       }
 
       let duration = audioDuration || 0
 
-      // ✅ دسته‌بندی بر اساس مدت زمان
+      // Duration category
       let durationCategory = 'MEDIUM'
       let expiresAt = null
       const now = new Date()
@@ -221,48 +242,72 @@
         expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
       }
 
-      // ✅ Process hashtags (only for waves > 30 seconds)
+      // Process hashtags (only for waves > 30 seconds)
       let finalHashtags = null
       if (isLongWave && hashtags.trim()) {
         finalHashtags = cleanHashtags(hashtags)
       }
 
+      console.log('7. Saving wave to database...')
+
+      // 3. Save to database
+      const waveDataToInsert = {
+        title: title.trim(),
+        audio_url: audioUrl,
+        cover_image: coverUrl,
+        duration: duration,
+        duration_category: durationCategory,
+        category: category,
+        author_id: currentUser.id,
+        expires_at: expiresAt,
+        views_count: 0,
+        likes_count: 0,
+        comments_count: 0,
+        saves_count: 0,
+        status: 'PUBLISHED'
+      }
+
+      // Only add hashtags if column exists and has value
+      if (finalHashtags) {
+        waveDataToInsert.hashtags = finalHashtags
+      }
+
       const { data: waveData, error: waveError } = await supabase
         .from('waves')
-        .insert({
-          title: title.trim(),
-          audio_url: audioUrl,
-          cover_image: coverUrl,
-          duration: duration,
-          duration_category: durationCategory,
-          category: category,
-          author_id: currentUser.id,
-          expires_at: expiresAt,
-          hashtags: finalHashtags, // ✅ Add hashtags
-          views_count: 0 // Initialize views
-        })
+        .insert(waveDataToInsert)
         .select()
         .single()
 
-      if (waveError) throw waveError
+      if (waveError) {
+        console.error('Database insert error:', waveError)
+        throw new Error(`خطا در ذخیره در دیتابیس: ${waveError.message}`)
+      }
+      console.log('8. Wave saved successfully:', waveData.id)
 
-      await trackEvent({
-        event_type: 'wave_publish',
-        event_data: {
-          wave_id: waveData.id,
-          duration: duration,
-          category: category,
-          duration_category: durationCategory,
-          hashtags: finalHashtags
-        }
-      })
+      // ✅ Try to track event, but don't fail if it doesn't work
+      try {
+        await trackEvent({
+          event_type: 'wave_publish',
+          event_data: {
+            wave_id: waveData.id,
+            duration: duration,
+            category: category,
+            duration_category: durationCategory,
+            hashtags: finalHashtags
+          }
+        })
+        console.log('9. Analytics tracked successfully')
+      } catch (analyticsError) {
+        // Analytics errors are not critical - just log them
+        console.warn('Analytics tracking failed (non-critical):', analyticsError)
+      }
 
-      // هدایت به صفحه اصلی
       goto(`/`)
 
     } catch (error) {
-      console.error('خطا در انتشار موج:', error)
-      alert('متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید.')
+      console.error('Error publishing wave:', error)
+      errorMessage = error instanceof Error ? error.message : 'متأسفانه خطایی رخ داد. لطفاً دوباره تلاش کنید.'
+      alert(errorMessage)
     } finally {
       isUploading = false
     }
@@ -274,23 +319,19 @@
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
 
-  // ✅ Format duration label
   function getDurationLabel(seconds: number): string {
     if (seconds < 30) return '⏱️ استوری (کمتر از ۳۰ ثانیه)'
     if (seconds < 240) return '🎵 موج (۳۰ ثانیه تا ۴ دقیقه)'
     return '🎙️ موج بلند (بیش از ۴ دقیقه)'
   }
 
-  // ✅ Get duration color
   function getDurationColor(seconds: number): string {
     if (seconds < 30) return '#10b981'
     if (seconds < 240) return '#f59e0b'
     return '#ef4444'
   }
 
-  onMount(() => {
-    // Initialize if needed
-  })
+  onMount(() => {})
 </script>
 
 <div class="create-wave-page">
@@ -307,6 +348,17 @@
       </h1>
       <div></div>
     </div>
+
+    <!-- Error Message -->
+    {#if errorMessage}
+      <div class="error-message">
+        <AlertCircle size={20} />
+        <span>{errorMessage}</span>
+        <button onclick={() => errorMessage = null}>
+          <X size={16} />
+        </button>
+      </div>
+    {/if}
 
     <!-- بخش ضبط صدا -->
     <div class="section">
@@ -375,7 +427,6 @@
             </button>
           </div>
           
-          <!-- ✅ Duration info -->
           {#if audioDuration > 0}
             <div class="duration-info" style="border-color: {getDurationColor(audioDuration)}">
               <span class="duration-label">📊 مدت زمان: {formatTime(audioDuration)}</span>
@@ -451,7 +502,7 @@
       </div>
     </div>
 
-    <!-- ✅ Hashtag Input (only for waves > 30 seconds) -->
+    <!-- Hashtag Input (only for waves > 30 seconds) -->
     {#if showHashtagInput}
       <div class="section hashtag-section">
         <div class="section-header">
@@ -474,7 +525,6 @@
           </div>
         </div>
         
-        <!-- Live preview of hashtags -->
         {#if hashtags.trim()}
           <div class="hashtag-preview">
             {#each hashtags.split(' ') as tag}
@@ -583,6 +633,32 @@
 
   .back-btn:hover :global(svg) {
     transform: translateX(-4px);
+  }
+
+  /* Error Message */
+  .error-message {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 10px;
+    color: #dc2626;
+    margin-bottom: 20px;
+  }
+
+  .error-message span {
+    flex: 1;
+    font-size: 14px;
+  }
+
+  .error-message button {
+    background: none;
+    border: none;
+    color: #dc2626;
+    cursor: pointer;
+    padding: 4px;
   }
 
   /* Sections */
@@ -828,7 +904,7 @@
     color: #ef4444;
   }
 
-  /* ✅ Duration info */
+  /* Duration info */
   .duration-info {
     display: flex;
     justify-content: space-between;
@@ -983,7 +1059,7 @@
     box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
   }
 
-  /* ✅ Hashtag styles */
+  /* Hashtag styles */
   .hashtag-section {
     background: #f8fafc;
     padding: 16px;
