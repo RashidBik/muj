@@ -719,6 +719,7 @@ async function handleBoost(planId: string) {
       title={wave.title}
       coverImage={wave.cover_image || '/default-cover.jpg'}
       autoPlay={false}
+      category={wave.category || 'FREE'}
     />
   </div>
 

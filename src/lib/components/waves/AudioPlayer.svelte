@@ -12,7 +12,12 @@
     Plus,
     Zap,
     Activity,
-    Music
+    Music,
+    Newspaper,
+    BookOpen,
+    Radio,
+    Sparkles,
+    Headphones
   } from 'lucide-svelte'
 
   let {
@@ -20,14 +25,19 @@
     waveId,
     title = 'Unknown Track',
     coverImage = '',
-    autoPlay = false
+    autoPlay = false,
+    category = 'FREE'
   }: {
     audioUrl: string
     waveId: string
     title?: string
     coverImage?: string
     autoPlay?: boolean
+    category?: string
   } = $props()
+
+  // Debug: log category
+  console.log('🎵 AudioPlayer received category:', category)
 
   // Audio context state
   let audioCtx: AudioContext | null = null
@@ -44,7 +54,7 @@
   let animationId: number | null = null
   let isAudioLoaded = $state(false)
   
-  // ✅ User state for analytics
+  // User state for analytics
   let currentUser = $state<any>(null)
   
   // Track if view has been counted
@@ -70,7 +80,87 @@
   const WIDTH = 600
   const HEIGHT = 120
 
-  // ✅ Subscribe to user store
+  // Get category background configuration
+  function getCategoryBackground(cat: string) {
+    // Normalize category to uppercase for matching
+    const normalizedCat = (cat || 'FREE').toUpperCase().trim()
+    
+    console.log('🔍 Looking up category:', normalizedCat)
+    
+    const configs: Record<string, {
+      gradient: string,
+      icon: any,
+      color: string,
+      glowColor: string,
+      label: string
+    }> = {
+      'MUSIC': {
+        gradient: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 30%, #0f3460 60%, #1a1a2e 100%)',
+        icon: Music,
+        color: '#6366f1',
+        glowColor: 'rgba(99, 102, 241, 0.3)',
+        label: '🎵 موسیقی'
+      },
+      'EDUCATION': {
+        gradient: 'linear-gradient(135deg, #0f172a 0%, #1e293b 30%, #0f766e 60%, #0f172a 100%)',
+        icon: BookOpen,
+        color: '#0d9488',
+        glowColor: 'rgba(13, 148, 136, 0.3)',
+        label: '📚 آموزش'
+      },
+      'AUDIOBOOK': {
+        gradient: 'linear-gradient(135deg, #1a1a2e 0%, #2d1b3d 30%, #4a1942 60%, #1a1a2e 100%)',
+        icon: Headphones,
+        color: '#a855f7',
+        glowColor: 'rgba(168, 85, 247, 0.3)',
+        label: '📖 کتاب صوتی'
+      },
+      'STORY': {
+        gradient: 'linear-gradient(135deg, #0f172a 0%, #1e1b2e 30%, #2d1b3d 60%, #0f172a 100%)',
+        icon: Sparkles,
+        color: '#f59e0b',
+        glowColor: 'rgba(245, 158, 11, 0.3)',
+        label: '📖 داستان'
+      },
+      'NEWS': {
+        gradient: 'linear-gradient(135deg, #0f172a 0%, #1e293b 30%, #b91c1c 60%, #0f172a 100%)',
+        icon: Newspaper,
+        color: '#ef4444',
+        glowColor: 'rgba(239, 68, 68, 0.3)',
+        label: '📰 اخبار'
+      },
+      'FREE': {
+        gradient: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%)',
+        icon: Radio,
+        color: '#6366f1',
+        glowColor: 'rgba(99, 102, 241, 0.2)',
+        label: '🎯 آزاد'
+      }
+    }
+    
+    const result = configs[normalizedCat] || configs['FREE']
+    console.log(`✅ Category: ${normalizedCat} -> Icon: ${result.icon?.name || 'Radio'}`)
+    return result
+  }
+
+  // Get category icon directly
+  function getCategoryIcon(cat: string) {
+    const normalizedCat = (cat || 'FREE').toUpperCase().trim()
+    
+    const icons: Record<string, any> = {
+      'MUSIC': Music,
+      'EDUCATION': BookOpen,
+      'AUDIOBOOK': Headphones,
+      'STORY': Sparkles,
+      'NEWS': Newspaper,
+      'FREE': Radio
+    }
+    const icon = icons[normalizedCat] || Radio
+    console.log(`🎨 Icon for ${normalizedCat}:`, icon?.name)
+    return icon
+  }
+
+  // Subscribe to user store
   $effect(() => {
     const unsubscribe = user.subscribe(value => {
       currentUser = value
@@ -96,7 +186,7 @@
     if (isPlaying) stopVisualizer()
   }
 
-  // ✅ Increment view when audio is played
+  // Increment view when audio is played
   async function incrementView() {
     if (viewCounted) return
     if (!waveId) return
@@ -117,7 +207,7 @@
     }
   }
 
-  // ✅ Track wave play for analytics
+  // Track wave play for analytics
   async function trackPlay() {
     if (!currentUser?.id || !waveId) return
     
@@ -158,7 +248,7 @@
         stopVisualizer()
       })
 
-      // ✅ Track play events
+      // Track play events
       audioElement.addEventListener('play', () => {
         // Count view (only once per session)
         if (!autoPlay || playCount > 0) {
@@ -309,7 +399,7 @@
     }
   }
 
-  // Main draw loop
+  // Main draw loop - TRANSPARENT BACKGROUND
   function drawVisualizer() {
     if (!isPlaying) {
       if (animationId) { 
@@ -332,6 +422,7 @@
     const freqDisplay = Math.round(20 + (avg / 255) * 80)
     if (freqLabel) freqLabel.textContent = `${freqDisplay} Hz`
     
+    // CLEAR WITH TRANSPARENCY - NO BACKGROUND
     ctx.clearRect(0, 0, WIDTH, HEIGHT)
     
     const barCount = 64
@@ -339,15 +430,11 @@
     const maxHeight = HEIGHT - 30
     const baseline = HEIGHT / 2
     
-    // Draw background gradient
-    const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT)
-    gradient.addColorStop(0, 'rgba(99, 102, 241, 0.03)')
-    gradient.addColorStop(0.5, 'rgba(99, 102, 241, 0.01)')
-    gradient.addColorStop(1, 'rgba(99, 102, 241, 0.03)')
-    ctx.fillStyle = gradient
-    ctx.fillRect(20, 10, WIDTH - 40, HEIGHT - 20)
+    // Get category colors
+    const bgConfig = getCategoryBackground(category)
+    const baseColor = bgConfig.color
     
-    // Draw frequency bars
+    // Draw frequency bars - NO BACKGROUND, just bars
     for (let i = 0; i < barCount; i++) {
       const dataIndex = Math.floor((i / barCount) * dataArray.length)
       const value = dataArray[dataIndex] || 0
@@ -358,14 +445,13 @@
       const x = 20 + i * barWidth
       const barWidthActual = Math.max(2, barWidth - 2)
       
-      // Draw positive bar (upward)
+      // Draw positive bar (upward) with category color
       const positiveGradient = ctx.createLinearGradient(0, baseline, 0, baseline - barHeight)
-      const hue = (i * 3 + 200) % 360
-      positiveGradient.addColorStop(0, `hsla(${hue}, 80%, 60%, 0.6)`)
-      positiveGradient.addColorStop(1, `hsla(${hue}, 80%, 60%, 0.9)`)
+      positiveGradient.addColorStop(0, `${baseColor}60`)
+      positiveGradient.addColorStop(1, `${baseColor}cc`)
       
       ctx.fillStyle = positiveGradient
-      ctx.shadowColor = `hsla(${hue}, 80%, 60%, 0.2)`
+      ctx.shadowColor = bgConfig.glowColor
       ctx.shadowBlur = 8
       ctx.beginPath()
       ctx.roundRect(x, baseline - barHeight, barWidthActual, barHeight, 2)
@@ -373,8 +459,8 @@
       
       // Draw negative bar (downward)
       const negativeGradient = ctx.createLinearGradient(0, baseline, 0, baseline + barHeight * 0.6)
-      negativeGradient.addColorStop(0, `hsla(${hue + 30}, 70%, 50%, 0.3)`)
-      negativeGradient.addColorStop(1, `hsla(${hue + 30}, 70%, 50%, 0.1)`)
+      negativeGradient.addColorStop(0, `${baseColor}40`)
+      negativeGradient.addColorStop(1, `${baseColor}15`)
       
       ctx.fillStyle = negativeGradient
       ctx.shadowBlur = 0
@@ -383,23 +469,16 @@
       ctx.fill()
     }
     
-    // Draw center line with glow
-    ctx.shadowColor = 'rgba(99, 102, 241, 0.3)'
-    ctx.shadowBlur = 10
+    // Draw center line with glow - THINNER AND MORE SUBTLE
+    ctx.shadowColor = bgConfig.glowColor
+    ctx.shadowBlur = 6
     ctx.beginPath()
     ctx.moveTo(20, baseline)
     ctx.lineTo(WIDTH - 20, baseline)
-    ctx.strokeStyle = 'rgba(99, 102, 241, 0.15)'
-    ctx.lineWidth = 1.5
-    ctx.stroke()
-    ctx.shadowBlur = 0
-    
-    // Draw border glow
-    ctx.beginPath()
-    ctx.roundRect(20, 10, WIDTH - 40, HEIGHT - 20, 8)
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)'
+    ctx.strokeStyle = `${baseColor}25`
     ctx.lineWidth = 1
     ctx.stroke()
+    ctx.shadowBlur = 0
     
     animationId = requestAnimationFrame(drawVisualizer)
   }
@@ -463,30 +542,54 @@
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   })
+
+  // Get category background and icon
+  const bgConfig = getCategoryBackground(category)
+  const CategoryIcon = getCategoryIcon(category)
 </script>
 
 <div class="audio-player-container">
-  <!-- Background with cover image or default gradient -->
+  <!-- Background with category-specific design - ALWAYS VISIBLE -->
   <div class="background-layer">
+    <!-- Category-specific gradient background (always visible) -->
+    <div class="category-background" style="background: {bgConfig.gradient};">
+      <div class="category-background-gradient"></div>
+      
+      <!-- LARGE CATEGORY ICON AS WATERMARK -->
+      <div class="category-watermark">
+        <CategoryIcon class="watermark-icon" size={120} style="color: {bgConfig.color};" />
+      </div>
+      
+      <!-- Small category label -->
+      <span class="category-label" style="color: {bgConfig.color};">
+        {bgConfig.label}
+      </span>
+      
+      <!-- Floating particles -->
+      <div class="particles">
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 0s;"></span>
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 2s;"></span>
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 4s;"></span>
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 1s;"></span>
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 3s;"></span>
+        <span class="particle" style="background: {bgConfig.color}; animation-delay: 5s;"></span>
+      </div>
+    </div>
+    
+    <!-- Cover image overlay (if exists) -->
     {#if coverImage}
       <img 
         src={coverImage} 
         alt={title}
-        class="cover-background"
+        class="cover-image"
         loading="lazy"
       />
       <div class="cover-overlay"></div>
-    {:else}
-      <div class="default-background">
-        <div class="default-background-gradient"></div>
-        <div class="default-pattern"></div>
-        <Music class="default-icon" size={48} />
-      </div>
     {/if}
   </div>
 
   <div class="controll-container">
-    <div class="visualizer-wrapper">
+    <div class="visualizer-wrapper" style="--glow-color: {bgConfig.glowColor};">
       <canvas 
         bind:this={canvas} 
         class="visualizer-canvas"
@@ -499,6 +602,7 @@
         class="play-toggle-btn" 
         onclick={(e) => { e.stopPropagation(); togglePlay() }}
         aria-label={isPlaying ? 'Pause' : 'Play'}
+        style="background: {bgConfig.color}30;"
       >
         {#if isPlaying}
           <Pause size={20} />
@@ -559,48 +663,31 @@
     z-index: 0;
   }
 
-  .cover-background {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    filter: blur(20px) brightness(0.4);
-    transform: scale(1.1);
-  }
-
-  .cover-overlay {
+  /* Category Background - ALWAYS VISIBLE */
+  .category-background {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(15, 23, 42, 0.6);
-    backdrop-filter: blur(8px);
-  }
-
-  /* Default Background */
-  .default-background {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    transition: background 0.5s ease;
   }
 
-  .default-background-gradient {
+  .category-background-gradient {
     position: absolute;
     top: -50%;
     left: -50%;
     width: 200%;
     height: 200%;
     background: 
-      radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
-      radial-gradient(circle at 80% 50%, rgba(56, 189, 248, 0.1) 0%, transparent 50%),
-      radial-gradient(circle at 50% 80%, rgba(244, 114, 182, 0.08) 0%, transparent 50%);
+      radial-gradient(circle at 20% 50%, var(--glow-color, rgba(99, 102, 241, 0.15)) 0%, transparent 50%),
+      radial-gradient(circle at 80% 50%, var(--glow-color, rgba(56, 189, 248, 0.1)) 0%, transparent 50%),
+      radial-gradient(circle at 50% 80%, var(--glow-color, rgba(244, 114, 182, 0.08)) 0%, transparent 50%);
     animation: gradientShift 15s ease-in-out infinite alternate;
   }
 
@@ -610,32 +697,94 @@
     100% { transform: rotate(360deg) scale(1); }
   }
 
-  .default-pattern {
+  /* LARGE CATEGORY ICON AS WATERMARK */
+  .category-watermark {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.15;
+    animation: watermarkFloat 6s ease-in-out infinite;
+  }
+
+  .watermark-icon {
+    width: 120px;
+    height: 120px;
+    opacity: 0.3;
+    filter: drop-shadow(0 0 30px var(--glow-color, rgba(99, 102, 241, 0.1)));
+  }
+
+  @keyframes watermarkFloat {
+    0%, 100% { transform: translateY(0px) scale(1) rotate(0deg); }
+    50% { transform: translateY(-8px) scale(1.02) rotate(2deg); }
+  }
+
+  /* Category Label */
+  .category-label {
+    position: relative;
+    z-index: 1;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    opacity: 0.25;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    margin-top: 8px;
+    text-transform: uppercase;
+  }
+
+  /* Particles */
+  .particles {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    background-image: 
-      radial-gradient(circle at 20% 50%, rgba(255,255,255,0.03) 1px, transparent 1px),
-      radial-gradient(circle at 80% 50%, rgba(255,255,255,0.02) 1px, transparent 1px);
-    background-size: 60px 60px;
-    background-position: 0 0, 30px 30px;
-    opacity: 0.5;
+    pointer-events: none;
+    overflow: hidden;
   }
 
-  .default-icon {
-    position: relative;
-    z-index: 1;
-    color: rgba(255,255,255,0.06);
-    width: 80px;
-    height: 80px;
-    animation: iconPulse 4s ease-in-out infinite;
+  .particle {
+    position: absolute;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    opacity: 0.15;
+    animation: floatParticle 8s ease-in-out infinite;
   }
 
-  @keyframes iconPulse {
-    0%, 100% { opacity: 0.06; transform: scale(1) rotate(0deg); }
-    50% { opacity: 0.12; transform: scale(1.1) rotate(5deg); }
+  .particle:nth-child(1) { top: 15%; left: 10%; width: 6px; height: 6px; }
+  .particle:nth-child(2) { top: 25%; right: 15%; width: 4px; height: 4px; }
+  .particle:nth-child(3) { bottom: 30%; left: 20%; width: 5px; height: 5px; }
+  .particle:nth-child(4) { top: 50%; right: 25%; width: 3px; height: 3px; }
+  .particle:nth-child(5) { bottom: 20%; right: 35%; width: 7px; height: 7px; }
+  .particle:nth-child(6) { top: 65%; left: 40%; width: 4px; height: 4px; }
+
+  @keyframes floatParticle {
+    0%, 100% { transform: translateY(0px) scale(1); opacity: 0.1; }
+    50% { transform: translateY(-20px) scale(1.5); opacity: 0.25; }
+  }
+
+  /* Cover Image (overlaid on top of category background) */
+  .cover-image {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.4;
+    filter: blur(8px) brightness(0.3);
+  }
+
+  .cover-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(15, 23, 42, 0.2);
+    backdrop-filter: blur(4px);
   }
 
   /* Main Content */
@@ -664,7 +813,7 @@
     position: absolute;
     inset: -8px;
     border-radius: 12px;
-    background: linear-gradient(135deg, #38bdf8, #818cf8, #f472b6);
+    background: var(--glow-color, rgba(99, 102, 241, 0.3));
     opacity: 0.1;
     filter: blur(16px);
     z-index: -1;
@@ -682,8 +831,8 @@
     height: auto;
     aspect-ratio: 600/120;
     border-radius: 8px;
-    background: radial-gradient(ellipse at center, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.9));
-    box-shadow: 0 8px 32px -8px rgba(0,0,0,0.6);
+    background: transparent !important;
+    box-shadow: none;
     cursor: pointer;
     transition: filter 0.2s;
   }
@@ -701,7 +850,6 @@
     height: clamp(32px, 6vw, 44px);
     border-radius: 50%;
     border: none;
-    background: rgba(255,255,255,0.12);
     backdrop-filter: blur(8px);
     cursor: pointer;
     display: flex;
@@ -878,9 +1026,17 @@
       font-size: 0.3rem;
     }
 
-    .default-icon {
-      width: 48px;
-      height: 48px;
+    .watermark-icon {
+      width: 80px !important;
+      height: 80px !important;
+    }
+
+    .category-label {
+      font-size: 11px;
+    }
+
+    .particle {
+      display: none;
     }
   }
 
@@ -896,9 +1052,13 @@
       height: 10px;
     }
 
-    .default-icon {
-      width: 32px;
-      height: 32px;
+    .watermark-icon {
+      width: 60px !important;
+      height: 60px !important;
+    }
+
+    .category-label {
+      font-size: 10px;
     }
   }
 
@@ -934,9 +1094,17 @@
       gap: 0.15rem;
     }
 
-    .default-icon {
-      width: 32px;
-      height: 32px;
+    .watermark-icon {
+      width: 60px !important;
+      height: 60px !important;
+    }
+
+    .category-label {
+      font-size: 10px;
+    }
+
+    .particle {
+      display: none;
     }
   }
 </style>
